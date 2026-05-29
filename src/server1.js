@@ -276,15 +276,49 @@ async function updateQuoteCache() {
   }
 }
 
-// [FIX 2] updatePriceCache 从 priceWindow 内存读取最新价，不查数据库
-// priceWindow 每10秒刷新，包含最近4分钟成交，末尾即最新价
-// priceWindow 为空时保留旧缓存值，rankingCache 用 close_price 兜底
-function updatePriceCache() {
-  if (priceWindow.size === 0) return;
-  for (const [symbol, entries] of priceWindow) {
-    if (!entries || entries.length === 0) continue;
-    const last = entries[entries.length - 1];
-    priceCache.set(symbol, { price: last.price, receivedAt: last.receivedAt });
+// updatePriceCache 只查最近1分钟成交价，数据量小速度快（~0.3s）
+// 超时或无数据时保留旧缓存值，稀疏成交股票用上次价格
+async function updatePriceCache() {
+  const client = await pricePool.connect();
+  try {
+    await client.query('SET statement_timeout = 5000');
+    const { rows } = await client.query(`
+      SELECT DISTINCT ON (symbol) symbol, price::numeric AS price, received_at
+      FROM market_data.tos_trades
+      WHERE received_at >= NOW() - INTERVAL '1 minute'
+        AND price > 0
+      ORDER BY symbol, received_at DESC, id DESC
+    `);
+    for (const row of rows) {
+      priceCache.set(row.symbol, { price: Number(row.price), receivedAt: row.received_at });
+    }
+  } catch (err) {
+    console.error('[PriceCache] Update failed:', err.message);
+  } finally {
+    client.release();
+  }
+}
+
+// 冷启动时查30分钟，快速填满 priceCache，之后切换到1分钟增量
+async function warmUpPriceCache() {
+  const client = await pricePool.connect();
+  try {
+    await client.query('SET statement_timeout = 15000');
+    const { rows } = await client.query(`
+      SELECT DISTINCT ON (symbol) symbol, price::numeric AS price, received_at
+      FROM market_data.tos_trades
+      WHERE received_at >= NOW() - INTERVAL '30 minutes'
+        AND price > 0
+      ORDER BY symbol, received_at DESC, id DESC
+    `);
+    for (const row of rows) {
+      priceCache.set(row.symbol, { price: Number(row.price), receivedAt: row.received_at });
+    }
+    console.log(`[PriceCache] warm up done, ${priceCache.size} symbols loaded`);
+  } catch (err) {
+    console.error('[PriceCache] Warm up failed:', err.message);
+  } finally {
+    client.release();
   }
 }
 
@@ -887,11 +921,23 @@ async function refreshRankingCache() {
 
     const newCache = rows.map(row => {
       const cached     = priceCache.get(row.symbol);
+      const quote      = quoteCache.get(row.symbol);
       const openPrice  = Number(row.open_price);
       const closePrice = Number(row.close_price) || 0;
-      // 优先级：priceCache（最近4分钟）> close_price（60秒更新）> open_price
-      const lastPrice  = cached ? cached.price : (closePrice > 0 ? closePrice : openPrice);
-      const changeAmt  = lastPrice - openPrice;
+
+      // 优先级：priceCache（tos_trades成交价）> quoteCache mid > close_price > open_price
+      let lastPrice;
+      if (cached) {
+        lastPrice = cached.price;
+      } else if (quote && quote.bid > 0 && quote.ask > 0) {
+        lastPrice = Number(((quote.bid + quote.ask) / 2).toFixed(4));
+      } else if (closePrice > 0) {
+        lastPrice = closePrice;
+      } else {
+        lastPrice = openPrice;
+      }
+
+      const changeAmt = lastPrice - openPrice;
       // 优先使用当前时段10日均量；缓存未就绪时回退到全天均量
       const intradayAvg = intradayAvgVolCache.get(row.symbol);
       const avg_vol_10d = intradayAvg != null ? intradayAvg : Number(row.avg_vol_10d);
@@ -1291,6 +1337,44 @@ app.get('/api/volume-surge-today', (req, res) => {
 });
 
 // === 大单监控筛选器 API ===
+app.get('/api/screener-large-orders', async (req, res) => {
+  try {
+    const timeWindowMins = Number(req.query.time_window_mins || 5);
+    const safeEtfList = etfList.length > 0 ? etfList : ['__NO_ETF__'];
+
+    const sql = `
+      SELECT DISTINCT ON (stock_code, side, level)
+        stock_code AS symbol, side, level,
+        price AS order_price, volume AS order_volume, detected_at
+      FROM market_data.l2_large_orders_bl
+      WHERE detected_at >= NOW() - ($1 * INTERVAL '1 minute')
+        AND NOT (stock_code = ANY($2::text[]))
+      ORDER BY stock_code, side, level, detected_at DESC
+    `;
+
+    const { rows } = await pool.query(sql, [timeWindowMins, safeEtfList]);
+
+    // 聚合成 { symbol: { bid: { 1: {price,vol,time}, 2:..., 3:... }, ask: {...} } }
+    const map = {};
+    for (const row of rows) {
+      const sym = row.symbol;
+      if (!map[sym]) map[sym] = { bid: {}, ask: {} };
+      const side = row.side === 'bid' ? 'bid' : 'ask';
+      map[sym][side][row.level] = {
+        price: Number(row.order_price),
+        vol:   Number(row.order_volume),
+        time:  row.detected_at,
+      };
+    }
+
+    res.json(map);
+  } catch (e) {
+    console.error('[screener-large-orders] error:', e);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+
 app.get('/api/large-orders-screener', async (req, res) => {
   try {
     const minOrderVolume = Number(req.query.min_order_volume || 1000);
@@ -1969,21 +2053,24 @@ function startAlertMonitor() {
   console.log(`[IntradayVolWriter] starting, interval=60s`);
   runScan('IntradayVolWriter', writeIntradayVolMinute, 60000);
 
-  // [FIX 8] 启动顺序：先预热 priceWindow，再同步 priceCache，再启动 RankingCache
-  // priceCache 从 priceWindow 内存读取，不查数据库；rankingCache 用 close_price 兜底
-  async function updatePriceWindowAndCache() {
-    await updatePriceWindow();
-    updatePriceCache();
-  }
-
+  // 启动顺序：先预热 priceCache（查 tos_trades），再启动 RankingCache
+  // PriceWindow 独立运行，用于3分钟涨跌计算
   console.log(`[PriceWindow] starting, interval=10s`);
   console.log(`[PriceCache] warming up...`);
-  updatePriceWindowAndCache().then(() => {
-    console.log(`[PriceCache] warm up done, starting RankingCache`);
+  warmUpPriceCache().then(() => {
     runScan('RankingCache', refreshRankingCache, 10000);
   });
 
-  runScan('PriceWindow+Cache', updatePriceWindowAndCache, 10000);
+  runScan('PriceCache', updatePriceCache, 10000);
+  updatePriceWindow();
+  runScan('PriceWindow', updatePriceWindow, 10000);
+
+  console.log(`[QuoteCache] cold-start initializing in 15s...`);
+  setTimeout(() => {
+    initQuoteCache().then(() => {
+      runScan('QuoteCache', updateQuoteCache, 10000);
+    });
+  }, 15000);
 
   console.log(`[Window10m] starting, interval=10s`);
   updateWindow10m();

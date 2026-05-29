@@ -333,6 +333,94 @@ const window10m = new Map();
 // 稳定选股历史快照：symbol -> [{ time, r1_val, r2_vol, r3_pct, r4_pct, r5_cnt, last_price, change_pct }, ...]
 const stableHistory = new Map();
 
+// 实时盘口缓存：symbol -> { bid: [{price, vol}, ...], ask: [{price, vol}, ...], receivedAt }
+// 最多保留 L1/L2/L3 三档，每10秒增量刷新
+const orderBookCache = new Map();
+
+const LARGE_ORDER_RATIO     = 10.0;  // 与 monitor_market.py 保持一致
+const LARGE_ORDER_MIN_VOL   = 1000;
+
+function _isLargeOrder(vol, levels) {
+  if (vol < LARGE_ORDER_MIN_VOL) return false;
+  const vols = levels.map(l => l.vol).filter(v => v > 0).sort((a, b) => a - b);
+  if (vols.length === 0) return false;
+  const median = vols[Math.floor(vols.length / 2)];
+  return median > 0 && vol / median >= LARGE_ORDER_RATIO;
+}
+
+async function _fetchOrderBook(intervalMins) {
+  const client = await pricePool.connect();
+  try {
+    await client.query('SET statement_timeout = 5000');
+    const { rows } = await client.query(`
+      SELECT s.symbol, ob.bid_depth, ob.ask_depth, ob.received_at
+      FROM (
+        SELECT DISTINCT symbol
+        FROM market_data.l2_order_book_bl_default
+        WHERE received_at >= NOW() - ($1 * INTERVAL '1 minute')
+      ) s
+      CROSS JOIN LATERAL (
+        SELECT bid_depth, ask_depth, received_at
+        FROM market_data.l2_order_book_bl_default
+        WHERE symbol = s.symbol
+          AND received_at >= NOW() - ($1 * INTERVAL '1 minute')
+        ORDER BY received_at DESC
+        LIMIT 1
+      ) ob
+    `, [intervalMins]);
+
+    for (const row of rows) {
+      const parseLevels = (depth, maxLevels = 10) => {
+        if (!depth) return [];
+        const arr = typeof depth === 'string' ? JSON.parse(depth) : depth;
+        return arr.slice(0, maxLevels).map(item => ({
+          price: Number(item[0]),
+          vol:   Number(item[1]),
+        }));
+      };
+
+      const bidAll = parseLevels(row.bid_depth, 10);
+      const askAll = parseLevels(row.ask_depth, 10);
+
+      // 只保留满足大单条件的档位（用全部10档计算中位数），仅展示前3档
+      const filterLarge = (levels) => {
+        const result = {};
+        levels.slice(0, 3).forEach((lv, i) => {
+          if (_isLargeOrder(lv.vol, levels)) {
+            result[i + 1] = { price: lv.price, vol: lv.vol };
+          }
+        });
+        return result;
+      };
+
+      const bid = filterLarge(bidAll);
+      const ask = filterLarge(askAll);
+
+      // 只缓存有大单的 symbol
+      if (Object.keys(bid).length > 0 || Object.keys(ask).length > 0) {
+        orderBookCache.set(row.symbol, { bid, ask, receivedAt: row.received_at });
+      } else {
+        orderBookCache.delete(row.symbol);
+      }
+    }
+    return rows.length;
+  } catch (err) {
+    console.error('[OrderBookCache] fetch failed:', err.message);
+    return 0;
+  } finally {
+    client.release();
+  }
+}
+
+async function warmUpOrderBookCache() {
+  const n = await _fetchOrderBook(5);
+  console.log(`[OrderBookCache] warm up done, ${n} symbols loaded`);
+}
+
+async function updateOrderBookCache() {
+  await _fetchOrderBook(1);
+}
+
 // [FIX 3] updatePriceWindow 改用 pricePool，加 id ASC 修复同毫秒乱序
 async function updatePriceWindow() {
   const client = await pricePool.connect();
@@ -1337,6 +1425,39 @@ app.get('/api/volume-surge-today', (req, res) => {
 });
 
 // === 大单监控筛选器 API ===
+app.get('/api/screener-large-orders', (req, res) => {
+  try {
+    const minVol = Number(req.query.min_vol || 0);
+    const maxVol = Number(req.query.max_vol || 0);
+    const side   = req.query.side || 'any';
+
+    const result = {};
+    for (const [symbol, ob] of orderBookCache) {
+      const entry = { bid: {}, ask: {}, receivedAt: ob.receivedAt };
+      let hasMatch = false;
+
+      for (const s of ['bid', 'ask']) {
+        if (side !== 'any' && side !== s) continue;
+        for (const [lv, data] of Object.entries(ob[s])) {
+          const v = data.vol;
+          if (minVol && v < minVol) continue;
+          if (maxVol && v > maxVol) continue;
+          entry[s][lv] = { price: data.price, vol: v, time: ob.receivedAt };
+          hasMatch = true;
+        }
+      }
+
+      if (hasMatch) result[symbol] = entry;
+    }
+
+    res.json(result);
+  } catch (e) {
+    console.error('[screener-large-orders] error:', e);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+
 app.get('/api/large-orders-screener', async (req, res) => {
   try {
     const minOrderVolume = Number(req.query.min_order_volume || 1000);
@@ -2033,6 +2154,10 @@ function startAlertMonitor() {
       runScan('QuoteCache', updateQuoteCache, 10000);
     });
   }, 15000);
+
+  warmUpOrderBookCache().then(() => {
+    runScan('OrderBookCache', updateOrderBookCache, 10000);
+  });
 
   console.log(`[Window10m] starting, interval=10s`);
   updateWindow10m();

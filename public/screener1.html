@@ -355,16 +355,19 @@
       </div>
     </div>
     <div class="filter-group filter-group-order">
-      <span class="filter-label">大单挂单量</span>
+      <span class="filter-label">大单挂单量 ≥</span>
       <div class="filter-row" style="gap:6px">
+        <input type="number" id="orderVolMin" placeholder="如 500" step="100" min="0" style="width:90px">
         <select id="orderSide" style="background:var(--bg3);border:1px solid var(--accent);color:var(--accent);font-family:var(--mono);font-size:13px;padding:6px 6px;border-radius:3px">
           <option value="any">买+卖</option>
           <option value="bid">仅买盘</option>
           <option value="ask">仅卖盘</option>
         </select>
-        <input type="number" id="orderVolMin" placeholder="最小量" step="100" min="0" style="width:90px">
-        <span class="filter-sep">—</span>
-        <input type="number" id="orderVolMax" placeholder="最大量" step="100" min="0" style="width:90px">
+        <select id="orderWindow" style="background:var(--bg3);border:1px solid var(--accent);color:var(--accent);font-family:var(--mono);font-size:13px;padding:6px 6px;border-radius:3px">
+          <option value="5">近5分钟</option>
+          <option value="15">近15分钟</option>
+          <option value="30">近30分钟</option>
+        </select>
       </div>
     </div>
     <div class="filter-actions">
@@ -557,13 +560,9 @@
   let orderMap = {};   // { symbol: { bid: {1:{price,vol,time}, 2:..., 3:...}, ask: {...} } }
   let orderWindow = 5;
 
-  async function fetchOrderData() {
-    const minVol = document.getElementById('orderVolMin').value || 0;
-    const maxVol = document.getElementById('orderVolMax').value || 0;
-    const side   = document.getElementById('orderSide').value;
+  async function fetchOrderData(win) {
     try {
-      const qs  = `min_vol=${minVol}&max_vol=${maxVol}&side=${side}`;
-      const res = await fetch(`/api/screener-large-orders?${qs}`);
+      const res = await fetch(`/api/screener-large-orders?time_window_mins=${win}`);
       if (!res.ok) throw new Error(res.status);
       orderMap = await res.json();
     } catch(e) {
@@ -575,10 +574,11 @@
   async function fetchData(params) {
     const dot = document.getElementById('statusDot');
     const qs  = paramsToQuery(params);
+    const win = Number(document.getElementById('orderWindow').value) || 5;
     try {
       const [screenerRes] = await Promise.all([
         fetch(`/api/screener${qs ? '?'+qs : ''}`),
-        fetchOrderData(),
+        fetchOrderData(win),
       ]);
       if (!screenerRes.ok) throw new Error(screenerRes.status);
       allData = await screenerRes.json();
@@ -679,21 +679,16 @@
   // ── render（排序 + 大单筛选 + 触发虚拟渲染）── ──────────
   function render() {
     const orderVolMin = Number(document.getElementById('orderVolMin').value) || 0;
-    const orderVolMax = Number(document.getElementById('orderVolMax').value) || 0;
     const orderSide   = document.getElementById('orderSide').value;
 
     sortedData = [...allData].filter(r => {
-      if (!orderVolMin && !orderVolMax) return true;
+      if (!orderVolMin) return true;
       const ord = orderMap[r.symbol];
       if (!ord) return false;
       const sides = orderSide === 'bid' ? ['bid'] : orderSide === 'ask' ? ['ask'] : ['bid','ask'];
       for (const s of sides) {
         for (const lv of [1,2,3]) {
-          const v = ord[s][lv] ? ord[s][lv].vol : null;
-          if (v === null) continue;
-          if (orderVolMin && v < orderVolMin) continue;
-          if (orderVolMax && v > orderVolMax) continue;
-          return true;
+          if (ord[s][lv] && ord[s][lv].vol >= orderVolMin) return true;
         }
       }
       return false;
@@ -725,8 +720,8 @@
   function clearAll() {
     FIELDS.forEach(([id]) => { const el=document.getElementById(id); el.value=''; el.classList.remove('has-value'); });
     document.getElementById('orderVolMin').value = '';
-    document.getElementById('orderVolMax').value = '';
     document.getElementById('orderSide').value   = 'any';
+    document.getElementById('orderWindow').value = '5';
     run();
   }
 
