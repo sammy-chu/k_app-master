@@ -1429,25 +1429,34 @@ app.get('/api/screener-large-orders', (req, res) => {
   try {
     const minVol = Number(req.query.min_vol || 0);
     const maxVol = Number(req.query.max_vol || 0);
-    const side   = req.query.side || 'any';
 
     const result = {};
     for (const [symbol, ob] of orderBookCache) {
-      const entry = { bid: {}, ask: {}, receivedAt: ob.receivedAt };
-      let hasMatch = false;
-
-      for (const s of ['bid', 'ask']) {
-        if (side !== 'any' && side !== s) continue;
-        for (const [lv, data] of Object.entries(ob[s])) {
-          const v = data.vol;
-          if (minVol && v < minVol) continue;
-          if (maxVol && v > maxVol) continue;
-          entry[s][lv] = { price: data.price, vol: v, time: ob.receivedAt };
-          hasMatch = true;
+      // 量区间过滤：任意档位满足条件即保留该 symbol
+      if (minVol || maxVol) {
+        let hasMatch = false;
+        for (const s of ['bid', 'ask']) {
+          for (const data of Object.values(ob[s])) {
+            const v = data.vol;
+            if (minVol && v < minVol) continue;
+            if (maxVol && v > maxVol) continue;
+            hasMatch = true;
+            break;
+          }
+          if (hasMatch) break;
         }
+        if (!hasMatch) continue;
       }
 
-      if (hasMatch) result[symbol] = entry;
+      result[symbol] = {
+        bid: Object.fromEntries(
+          Object.entries(ob.bid).map(([lv, d]) => [lv, { price: d.price, vol: d.vol, time: ob.receivedAt }])
+        ),
+        ask: Object.fromEntries(
+          Object.entries(ob.ask).map(([lv, d]) => [lv, { price: d.price, vol: d.vol, time: ob.receivedAt }])
+        ),
+        receivedAt: ob.receivedAt,
+      };
     }
 
     res.json(result);

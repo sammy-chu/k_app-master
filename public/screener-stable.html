@@ -201,6 +201,19 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  tr.grace td { color: #40a9ff !important; }
+  tr.grace .up, tr.grace .down, tr.grace .flat { color: #40a9ff !important; }
+  tr.grace .r-pass { color: #40a9ff !important; }
+  tr.grace-pinned td { color: #40a9ff !important; font-weight: 500; }
+  tr.grace-pinned .up, tr.grace-pinned .down, tr.grace-pinned .flat { color: #40a9ff !important; }
+  tr.grace-pinned .r-pass { color: #40a9ff !important; }
+  tr.grace-pinned { border-left: 2px solid #40a9ff; }
+  .grace-badge {
+    font-size: 10px; padding: 1px 5px; border-radius: 2px;
+    background: #40a9ff22; border: 1px solid #40a9ff55;
+    color: #40a9ff; margin-left: 5px; vertical-align: middle;
+  }
+
   @media (max-width: 900px) {
     .filter-panel { gap: 10px; }
     .header-bar { flex-direction: column; align-items: flex-start; gap: 8px; }
@@ -343,6 +356,69 @@ let countdown  = 10;
 let lastParams = {};
 let isFetching = false;
 
+// ── 宽限期状态 ────────────────────────────────────────────────────────────
+// symbol -> { exitAt: Date, exitPrice: number, pinned: boolean, pinnedAt: Date }
+const graceMap = new Map();
+let prevPassSymbols = new Set();  // 上一次满足条件的 symbol 集合
+const GRACE_MS   = 2 * 60 * 1000;   // 2分钟宽限期
+const GRACE_VOL  = 0.005;            // 0.5% 波动触发置顶
+
+function updateGrace(passSymbols, allRows) {
+  const now = Date.now();
+
+  // 1. 只有之前在通过列表里的股票退出时才加入宽限期
+  for (const [sym, g] of graceMap) {
+    // 更新宽限期内股票的当前数据和波动检测
+    const curRow = allRows.find(r => r.symbol === sym);
+    if (curRow && g.exitPrice > 0) {
+      const chg = Math.abs(Number(curRow.last_price) - g.exitPrice) / g.exitPrice;
+      if (chg >= GRACE_VOL && !g.pinned) {
+        g.pinned   = true;
+        g.pinnedAt = now;
+      }
+      g.row = curRow;
+    }
+    // 清理过期
+    if (now - g.exitAt > GRACE_MS) graceMap.delete(sym);
+  }
+
+  // 2. 检查之前通过的股票是否刚退出（只处理 prevPassSymbols 里有、现在没有的）
+  for (const sym of prevPassSymbols) {
+    if (!passSymbols.has(sym) && !graceMap.has(sym)) {
+      const row = allRows.find(r => r.symbol === sym);
+      if (row) {
+        graceMap.set(sym, {
+          exitAt:    now,
+          exitPrice: Number(row.last_price) || 0,
+          pinned:    false,
+          pinnedAt:  null,
+          row,
+        });
+      }
+    }
+    // 重新满足条件，清除宽限期
+    if (passSymbols.has(sym) && graceMap.has(sym)) {
+      graceMap.delete(sym);
+    }
+  }
+
+  // 3. 更新 prevPassSymbols
+  prevPassSymbols = new Set(passSymbols);
+}
+
+function getGraceRows() {
+  const now = Date.now();
+  return [...graceMap.entries()]
+    .filter(([, g]) => now - g.exitAt <= GRACE_MS)
+    .map(([sym, g]) => ({
+      ...g.row,
+      _grace:  true,
+      _pinned: g.pinned,
+      _exitAt: g.exitAt,
+      _remainMs: GRACE_MS - (now - g.exitAt),
+    }));
+}
+
 const SORT_KEYS = [
   'symbol','last_price','change_pct','change_amount','total_volume','vol_ratio',
   'r1_val','r2_vol','r3_pct','r4_pct','r5_cnt'
@@ -446,7 +522,10 @@ function applyFilter() {
     const vol = Number(row.total_volume) || 0;
     const avg = Number(row.avg_vol_10d)  || 0;
     return { ...row, ...ev, vol_ratio: avg > 0 ? vol / avg : 0 };
-  }).filter(row => {
+  });
+
+  // 满足全部条件的 symbol 集合
+  const passRows = withEval.filter(row => {
     if (!row.passAll) return false;
     const price = Number(row.last_price)   || 0;
     const pct   = Number(row.change_pct)   || 0;
@@ -463,15 +542,31 @@ function applyFilter() {
     return true;
   });
 
-  sortedData = [...withEval].sort((a, b) => {
+  const passSymbols = new Set(passRows.map(r => r.symbol));
+
+  // 更新宽限期状态
+  updateGrace(passSymbols, withEval);
+
+  // 正常行排序
+  const sorted = [...passRows].sort((a, b) => {
     const va = sortKey === 'symbol' ? a[sortKey] : (Number(a[sortKey]) ?? -Infinity);
     const vb = sortKey === 'symbol' ? b[sortKey] : (Number(b[sortKey]) ?? -Infinity);
     return va < vb ? sortDir : va > vb ? -sortDir : 0;
   });
 
+  // 宽限期行：置顶的排最前，其余按退出时间降序
+  const graceRows = getGraceRows();
+  const pinnedRows = graceRows.filter(r => r._pinned)
+    .sort((a, b) => b._exitAt - a._exitAt);
+  const gracePlainRows = graceRows.filter(r => !r._pinned)
+    .sort((a, b) => b._exitAt - a._exitAt);
+
+  sortedData = [...pinnedRows, ...sorted, ...gracePlainRows];
+
   const total = allData.filter(r => evalRow(r).passAll).length;
   document.getElementById('count-info').textContent =
-    `全部通过 ${total} 只 · 当前筛选 ${sortedData.length} 只`;
+    `全部通过 ${total} 只 · 当前筛选 ${sorted.length} 只` +
+    (graceRows.length ? ` · 宽限期 ${graceRows.length} 只` : '');
 
   renderTable();
 }
@@ -501,6 +596,8 @@ function renderTable() {
       tr.dataset.sym = row.symbol;
     }
     if (tr._lastHtml !== html) { tr.innerHTML = html; tr._lastHtml = html; }
+    // 宽限期样式
+    tr.className = row._pinned ? 'grace-pinned' : row._grace ? 'grace' : '';
     if (tbody.children[ci] !== tr) tbody.insertBefore(tr, tbody.children[ci] || null);
     ci++;
   }
@@ -515,11 +612,21 @@ function buildRowHTML(r) {
   const vPct = Math.min(100, maxVol > 0 ? vol / maxVol * 100 : 0);
   const vr   = r.vol_ratio || 0;
 
+  // 宽限期徽标
+  let graceBadge = '';
+  if (r._grace || r._pinned) {
+    const remainSec = Math.max(0, Math.ceil((r._remainMs || 0) / 1000));
+    const mm = String(Math.floor(remainSec / 60)).padStart(2, '0');
+    const ss = String(remainSec % 60).padStart(2, '0');
+    const label = r._pinned ? `📌 置顶 ${mm}:${ss}` : `⏱ ${mm}:${ss}`;
+    graceBadge = `<span class="grace-badge">${label}</span>`;
+  }
+
   // 规则列：全部通过才显示，所以值只会是绿色
   const rVal = (v, format) => v != null ? format(v) : '—';
 
   return `
-    <td><span class="sym" onclick="lookupAndShow('${r.symbol}')">${r.symbol}</span></td>
+    <td><span class="sym" onclick="lookupAndShow('${r.symbol}')">${r.symbol}</span>${graceBadge}</td>
     <td class="${pcls}">${fmt(r.last_price,2)}</td>
     <td class="${pcls}">${sign}${pct.toFixed(2)}%</td>
     <td class="${pcls}">${sign}${fmt(r.change_amount,3)}</td>
@@ -718,6 +825,16 @@ setInterval(() => {
     countdown--;
   }
   document.getElementById('refresh-timer').textContent = `${countdown}s 后刷新`;
+
+  // 宽限期倒计时每秒刷新（如果有宽限期股票）
+  if (graceMap.size > 0) {
+    // 清理过期
+    const now = Date.now();
+    for (const [sym, g] of graceMap) {
+      if (now - g.exitAt > GRACE_MS) graceMap.delete(sym);
+    }
+    renderTable();
+  }
 }, 1000);
 
 document.addEventListener('visibilitychange', () => {

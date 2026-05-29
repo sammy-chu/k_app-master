@@ -560,9 +560,8 @@
   async function fetchOrderData() {
     const minVol = document.getElementById('orderVolMin').value || 0;
     const maxVol = document.getElementById('orderVolMax').value || 0;
-    const side   = document.getElementById('orderSide').value;
     try {
-      const qs  = `min_vol=${minVol}&max_vol=${maxVol}&side=${side}`;
+      const qs  = `min_vol=${minVol}&max_vol=${maxVol}`;
       const res = await fetch(`/api/screener-large-orders?${qs}`);
       if (!res.ok) throw new Error(res.status);
       orderMap = await res.json();
