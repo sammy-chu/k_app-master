@@ -386,15 +386,14 @@ function updateGrace(passSymbols, allRows) {
   for (const sym of prevPassSymbols) {
     if (!passSymbols.has(sym) && !graceMap.has(sym)) {
       const row = allRows.find(r => r.symbol === sym);
-      if (row) {
-        graceMap.set(sym, {
-          exitAt:    now,
-          exitPrice: Number(row.last_price) || 0,
-          pinned:    false,
-          pinnedAt:  null,
-          row,
-        });
-      }
+      if (!row) continue;  // 该股票已不在今日数据中，跳过
+      graceMap.set(sym, {
+        exitAt:    now,
+        exitPrice: Number(row.last_price) || 0,
+        pinned:    false,
+        pinnedAt:  null,
+        row,
+      });
     }
     // 重新满足条件，清除宽限期
     if (passSymbols.has(sym) && graceMap.has(sym)) {
@@ -409,12 +408,12 @@ function updateGrace(passSymbols, allRows) {
 function getGraceRows() {
   const now = Date.now();
   return [...graceMap.entries()]
-    .filter(([, g]) => now - g.exitAt <= GRACE_MS)
+    .filter(([, g]) => now - g.exitAt <= GRACE_MS && g.row)
     .map(([sym, g]) => ({
       ...g.row,
-      _grace:  true,
-      _pinned: g.pinned,
-      _exitAt: g.exitAt,
+      _grace:    true,
+      _pinned:   g.pinned,
+      _exitAt:   g.exitAt,
       _remainMs: GRACE_MS - (now - g.exitAt),
     }));
 }
@@ -481,15 +480,14 @@ async function fetchData(params) {
     if (!res.ok) throw new Error(res.status);
     allData = await res.json();
     maxVol  = allData.reduce((m, r) => Math.max(m, Number(r.total_volume)||0), 1);
-    dot.className = 'status-dot live';
-    stxt.innerHTML = `<span class="status-dot live"></span>实时 · ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;
+    if (dot) dot.className = 'status-dot live';
+    if (stxt) stxt.innerHTML = `<span class="status-dot live"></span>实时 · ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;
     applyFilter();
-    // 如果查询框有内容，刷新查询结果
     const sym = document.getElementById('symbolInput').value.trim().toUpperCase();
     if (sym) renderLookup(sym);
   } catch(e) {
-    dot.className = 'status-dot error';
-    stxt.innerHTML = `<span class="status-dot error"></span>连接失败`;
+    if (dot) dot.className = 'status-dot error';
+    if (stxt) stxt.innerHTML = `<span class="status-dot error"></span>连接失败`;
     console.error(e);
   } finally {
     isFetching = false;
@@ -561,7 +559,7 @@ function applyFilter() {
   const gracePlainRows = graceRows.filter(r => !r._pinned)
     .sort((a, b) => b._exitAt - a._exitAt);
 
-  sortedData = [...pinnedRows, ...sorted, ...gracePlainRows];
+  sortedData = [...pinnedRows, ...gracePlainRows, ...sorted];
 
   const total = allData.filter(r => evalRow(r).passAll).length;
   document.getElementById('count-info').textContent =
