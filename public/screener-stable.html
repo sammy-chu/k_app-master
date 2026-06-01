@@ -313,9 +313,9 @@
   <div class="status-bar">
     <div class="rule-summary">
       <span class="rule-tag">R1 振幅&lt;1.2%</span>
-      <span class="rule-tag">R2 量≥110</span>
-      <span class="rule-tag">R3 价偏&lt;0.5%</span>
-      <span class="rule-tag">R4 漂移&lt;0.3%</span>
+      <span class="rule-tag">R2 量≥310</span>
+      <span class="rule-tag">R3 价偏分档</span>
+      <span class="rule-tag">R4 漂移分档</span>
       <span class="rule-tag">R5 ≥6/7分钟安静</span>
     </div>
     <span id="count-info">—</span>
@@ -331,10 +331,10 @@
         <th onclick="sortBy('change_amount')">涨跌额</th>
         <th onclick="sortBy('total_volume')">今日量</th>
         <th onclick="sortBy('vol_ratio')">量比</th>
-        <th onclick="sortBy('r1_val')" title="10分钟振幅%，&lt;1.2%">R1 振幅%</th>
-        <th onclick="sortBy('r2_vol')" title="10分钟总量，≥110">R2 量</th>
-        <th onclick="sortBy('r3_pct')" title="现价偏离均价%，&lt;0.5%">R3 价偏%</th>
-        <th onclick="sortBy('r4_pct')" title="首尾中间价漂移%，&lt;0.3%">R4 漂%</th>
+        <th onclick="sortBy('r1_val')" title="7分钟振幅%，&lt;1.2%">R1 振幅%</th>
+        <th onclick="sortBy('r2_vol')" title="7分钟总量，≥310">R2 量</th>
+        <th onclick="sortBy('r3_pct')" title="现价偏离均价%，按开盘价分档">R3 价偏%</th>
+        <th onclick="sortBy('r4_pct')" title="首尾中间价漂移%，按开盘价分档">R4 漂%</th>
         <th onclick="sortBy('r5_cnt')" title="最近7分钟内安静分钟数，≥6">R5 分钟</th>
       </tr>
     </thead>
@@ -423,16 +423,36 @@ const SORT_KEYS = [
   'r1_val','r2_vol','r3_pct','r4_pct','r5_cnt'
 ];
 
+// ── 分档阈值函数（与 server.js 保持一致）─────────────────────────────────
+function getR35Thresh(openPrice) {
+  const p = Math.max(Number(openPrice) || 0, 0);
+  if (p < 125)  return 0.05;   // %
+  if (p < 267)  return 0.04;
+  if (p < 480)  return 0.03;
+  if (p < 1000) return 0.025;
+  return 0.015;
+}
+function getR4Thresh(openPrice) {
+  const p = Math.max(Number(openPrice) || 0, 0);
+  if (p < 200)  return 0.3;   // %
+  if (p < 400)  return 0.2;
+  if (p < 800)  return 0.15;
+  return 0.1;
+}
+
 // ── RULE EVAL（固定5条，全部必须通过）─────────────────────────────────────
 function evalRow(row) {
-  const r1_pass = row.r1_val !== null && row.r1_val !== undefined ? row.r1_val < 1.2  : null;
-  const r2_pass = row.r2_vol !== null && row.r2_vol !== undefined ? row.r2_vol >= 110 : null;
-  const r3_pass = row.r3_pct !== null && row.r3_pct !== undefined ? row.r3_pct < 0.5  : null;
-  const r4_pass = row.r4_pct !== null && row.r4_pct !== undefined ? row.r4_pct < 0.3  : null;
-  const r5_pass = row.r5_cnt !== null && row.r5_cnt !== undefined ? row.r5_cnt >= 6   : null;
+  const op = Number(row.open_price) || Number(row.last_price) || 0;
+  const r35T = getR35Thresh(op);
+  const r4T  = getR4Thresh(op);
+  const r1_pass = row.r1_val !== null && row.r1_val !== undefined ? row.r1_val < 1.2    : null;
+  const r2_pass = row.r2_vol !== null && row.r2_vol !== undefined ? row.r2_vol >= 310   : null;
+  const r3_pass = row.r3_pct !== null && row.r3_pct !== undefined ? row.r3_pct < r35T  : null;
+  const r4_pass = row.r4_pct !== null && row.r4_pct !== undefined ? row.r4_pct < r4T   : null;
+  const r5_pass = row.r5_cnt !== null && row.r5_cnt !== undefined ? row.r5_cnt >= 6    : null;
   const passAll = r1_pass === true && r2_pass === true && r3_pass === true
                && r4_pass === true && r5_pass === true;
-  return { r1_pass, r2_pass, r3_pass, r4_pass, r5_pass, passAll };
+  return { r1_pass, r2_pass, r3_pass, r4_pass, r5_pass, passAll, r35T, r4T };
 }
 
 // ── INPUTS ────────────────────────────────────────────────────────────────
@@ -747,35 +767,35 @@ function renderLookup(sym) {
       pass: ev.r1_pass,
       value: row.r1_val != null ? row.r1_val.toFixed(2)+'%' : '—',
       threshold: '< 1.2%',
-      desc: '10分钟 High-Low / 现价',
+      desc: '7分钟 High-Low / 现价',
     },
     {
       title: 'R2 成交量',
       pass: ev.r2_pass,
       value: row.r2_vol != null ? fmtVol(row.r2_vol) : '—',
-      threshold: '≥ 110 股',
-      desc: '10分钟总成交量',
+      threshold: '≥ 310 股',
+      desc: '7分钟总成交量',
     },
     {
       title: 'R3 价格偏离',
       pass: ev.r3_pass,
       value: row.r3_pct != null ? row.r3_pct.toFixed(2)+'%' : '—',
-      threshold: '< 0.5%',
-      desc: '现价 vs 10分钟收盘均价',
+      threshold: '< ' + (ev.r35T ?? getR35Thresh(row.open_price)) + '%',
+      desc: '现价 vs 7分钟均价｜按开盘价分档',
     },
     {
       title: 'R4 中间价漂移',
       pass: ev.r4_pass,
       value: row.r4_pct != null ? row.r4_pct.toFixed(2)+'%' : '—',
-      threshold: '< 0.3%',
-      desc: '首根 vs 末根中间价',
+      threshold: '< ' + (ev.r4T ?? getR4Thresh(row.open_price)) + '%',
+      desc: '首根 vs 末根中间价｜按开盘价分档',
     },
     {
       title: 'R5 安静分钟',
       pass: ev.r5_pass,
       value: row.r5_cnt != null ? row.r5_cnt+'分钟' : '—',
       threshold: '≥ 6 / 7分钟',
-      desc: '最近7根K线中振幅<0.5%(低价)/0.3%(≥200)',
+      desc: '最近7根K线｜阈值同R3按开盘价分档',
     },
   ];
 

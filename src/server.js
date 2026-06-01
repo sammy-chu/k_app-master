@@ -444,7 +444,7 @@ async function updatePriceWindow() {
   }
 }
 
-// [Window10m] 10分钟每分钟 OHLCV 聚合缓存（方案A: GROUP BY）
+// [Window7m] 7分钟每分钟 OHLCV 聚合缓存（方案A: GROUP BY）
 // 走 idx_tos_trades_received_at 索引，实测 ~71ms / 31628 行 / 2839 bars
 // 仅用 pricePool，与其他 pricePool 任务完全隔离，不影响任何现有功能
 async function updateWindow10m() {
@@ -461,7 +461,7 @@ async function updateWindow10m() {
         (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close,
         COALESCE(SUM(size::numeric), 0)                                   AS volume
       FROM tos_trades
-      WHERE received_at >= NOW() - INTERVAL '10 minutes'
+      WHERE received_at >= NOW() - INTERVAL '7 minutes'
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
         AND price IS NOT NULL
         AND price::numeric > 0
@@ -489,7 +489,28 @@ async function updateWindow10m() {
   snapshotStableHistory();
 }
 
-const STABLE_R1 = 1.2, STABLE_R2 = 110, STABLE_R3 = 0.5, STABLE_R4 = 0.3, STABLE_R5 = 7;
+const STABLE_R1 = 1.2, STABLE_R2 = 310, STABLE_R5_WINDOW = 7, STABLE_R5_MIN = 6;
+
+// R3/R5 共用阈值：按开盘价分档（"低于X按X算"向上取边界）
+// 开盘价 < 125 → 0.05%；125~267 → 0.04%；267~480 → 0.03%；480~1000 → 0.025%；≥1000 → 0.015%
+function getR35Thresh(openPrice) {
+  const p = Math.max(openPrice, 0);
+  if (p < 125)  return 0.0005;   // 0.05%
+  if (p < 267)  return 0.0004;   // 0.04%
+  if (p < 480)  return 0.0003;   // 0.03%
+  if (p < 1000) return 0.00025;  // 0.025%
+  return 0.00015;                 // 0.015%
+}
+
+// R4 阈值：按开盘价分档（价格低于最低边界按最低边界算）
+// < 200 → 0.3%；200~400 → 0.2%（低于300按300算）；400~800 → 0.15%（低于533.5按533.5算）；≥800 → 0.1%（低于1200按1200算）
+function getR4Thresh(openPrice) {
+  const p = Math.max(openPrice, 0);
+  if (p < 200)  return 0.003;    // 0.3%
+  if (p < 400)  return 0.002;    // 0.2%（低于300时按300算，阈值仍0.2%）
+  if (p < 800)  return 0.0015;   // 0.15%（低于533.5时按533.5算，阈值仍0.15%）
+  return 0.001;                   // 0.1%（低于1200时按1200算，阈值仍0.1%）
+}
 
 function snapshotStableHistory() {
   const now = new Date();
@@ -501,6 +522,7 @@ function snapshotStableHistory() {
 
   for (const row of rankingCache) {
     const price     = Number(row.last_price);
+    const openPrice = Number(row.open_price) || price;
     const changePct = Number(row.change_pct);
     if (!price) continue;
 
@@ -516,14 +538,15 @@ function snapshotStableHistory() {
     const firstMid = (bars[0].high + bars[0].low) / 2;
     const lastMid  = (bars[bars.length - 1].high + bars[bars.length - 1].low) / 2;
     const r4_pct   = lastMid > 0 ? Number((Math.abs(firstMid - lastMid) / lastMid * 100).toFixed(3)) : null;
-    const candleThresh = price >= 200 ? 0.003 : 0.005;
-    const r5_cnt = bars.filter(b => b.open > 0 && Math.abs(b.close - b.open) / b.open < candleThresh).length;
+    const r35Thresh  = getR35Thresh(openPrice);
+    const r5_bars  = bars.slice(-STABLE_R5_WINDOW);
+    const r5_cnt   = r5_bars.filter(b => b.open > 0 && Math.abs(b.close - b.open) / b.open < r35Thresh).length;
 
     if (r1_val >= STABLE_R1) continue;
     if (r2_vol <  STABLE_R2) continue;
-    if (r3_pct === null || r3_pct >= STABLE_R3) continue;
-    if (r4_pct === null || r4_pct >= STABLE_R4) continue;
-    if (r5_cnt <  STABLE_R5) continue;
+    if (r3_pct === null || r3_pct >= r35Thresh * 100) continue;
+    if (r4_pct === null || r4_pct >= getR4Thresh(openPrice) * 100) continue;
+    if (r5_cnt <  STABLE_R5_MIN) continue;
 
     if (!stableHistory.has(row.symbol)) stableHistory.set(row.symbol, []);
     const hist   = stableHistory.get(row.symbol);
@@ -1307,11 +1330,11 @@ app.get('/api/screener', (req, res) => {
 
 // === 稳定选股器 API ===
 // 在自由选股器基础上叠加 5 条稳定性规则（全部基于 window10m 内存缓存，不查库）
-// R1: 10分钟内 high-low < 现价 × 1.2%
-// R2: 10分钟内总成交量 >= 110
-// R3: |现价 - 10分钟收盘均价| / 均价 < 0.5%
-// R4: |首根中间价 - 末根中间价| / 末根中间价 < 0.3%（绝对值）
-// R5: 每分钟 |close-open|/open < 阈值（价格<200用0.5%，>=200用0.3%），至少7分钟满足
+// R1: 7分钟内 high-low < 现价 × 1.2%
+// R2: 7分钟内总成交量 >= 310
+// R3: |现价 - 7分钟收盘均价| / 均价 < 按开盘价分档阈值（0.05%/0.04%/0.03%/0.025%/0.015%）
+// R4: |首根中间价 - 末根中间价| / 末根中间价 < 按开盘价分档阈值（0.3%/0.2%/0.15%/0.1%）
+// R5: 最近7根K线中，|close-open|/open < R3/R5阈值 的分钟数 >= 6
 app.get('/api/screener-stable', (req, res) => {
   try {
     const q = req.query;
@@ -1344,20 +1367,21 @@ app.get('/api/screener-stable', (req, res) => {
 
       // ── window10m 数据 ──
       const bars = window10m.get(row.symbol);
+      const openPrice = Number(row.open_price) || price;
 
       // 数据不足时仍返回，但规则字段为 null（前端显示"—"）
       let r1_val = null, r2_vol = null, r3_pct = null, r4_pct = null, r5_cnt = null;
 
       if (bars && bars.length > 0) {
-        // R1: 10分钟振幅 % = (windowHigh - windowLow) / price * 100
+        // R1: 7分钟振幅 % = (windowHigh - windowLow) / price * 100
         const winHigh = Math.max(...bars.map(b => b.high));
         const winLow  = Math.min(...bars.map(b => b.low));
         r1_val = Number(((winHigh - winLow) / price * 100).toFixed(3));
 
-        // R2: 10分钟总成交量
+        // R2: 7分钟总成交量
         r2_vol = bars.reduce((s, b) => s + b.volume, 0);
 
-        // R3: |现价 - 10分钟收盘均价| / 均价 × 100 (%)
+        // R3: |现价 - 7分钟收盘均价| / 均价 × 100 (%)
         const avgClose = bars.reduce((s, b) => s + b.close, 0) / bars.length;
         r3_pct = avgClose > 0
           ? Number((Math.abs(price - avgClose) / avgClose * 100).toFixed(3))
@@ -1370,10 +1394,11 @@ app.get('/api/screener-stable', (req, res) => {
           ? Number((Math.abs(firstMid - lastMid) / lastMid * 100).toFixed(3))
           : null;
 
-        // R5: 安静蜡烛数（价格<200阈值0.5%，>=200阈值0.3%）
-        const candleThresh = price >= 200 ? 0.003 : 0.005;
-        r5_cnt = bars.filter(b =>
-          b.open > 0 && Math.abs(b.close - b.open) / b.open < candleThresh
+        // R5: 最近7根K线中安静蜡烛数（按开盘价分档阈值）
+        const r35Thresh = getR35Thresh(openPrice);
+        const r5_bars = bars.slice(-STABLE_R5_WINDOW);
+        r5_cnt = r5_bars.filter(b =>
+          b.open > 0 && Math.abs(b.close - b.open) / b.open < r35Thresh
         ).length;
       }
 
@@ -1397,12 +1422,12 @@ app.get('/api/screener-stable', (req, res) => {
         bid,
         ask,
         spread,
-        // 5条规则原始指标值（前端负责计算通过/失败和评分）
-        r1_val,   // 10min振幅%，< 1.2% 为通过
-        r2_vol,   // 10min总量，>= 110 为通过
-        r3_pct,   // 现价偏离均价%，< 0.5% 为通过
-        r4_pct,   // 首尾中间价漂移%，< 0.3% 为通过
-        r5_cnt,   // 安静分钟数，>= 7 为通过
+        // 5条规则原始指标值（前端负责计算通过/失败）
+        r1_val,   // 7min振幅%，< 1.2% 为通过
+        r2_vol,   // 7min总量，>= 310 为通过
+        r3_pct,   // 现价偏离均价%，按开盘价分档阈值
+        r4_pct,   // 首尾中间价漂移%，按开盘价分档阈值
+        r5_cnt,   // 最近7根K线中安静分钟数，>= 6 为通过
         bars_count: bars ? bars.length : 0,
       });
     }
