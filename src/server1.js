@@ -444,7 +444,7 @@ async function updatePriceWindow() {
   }
 }
 
-// [Window10m] 10分钟每分钟 OHLCV 聚合缓存（方案A: GROUP BY）
+// [Window7m] 7分钟每分钟 OHLCV 聚合缓存（方案A: GROUP BY）
 // 走 idx_tos_trades_received_at 索引，实测 ~71ms / 31628 行 / 2839 bars
 // 仅用 pricePool，与其他 pricePool 任务完全隔离，不影响任何现有功能
 async function updateWindow10m() {
@@ -461,7 +461,7 @@ async function updateWindow10m() {
         (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close,
         COALESCE(SUM(size::numeric), 0)                                   AS volume
       FROM tos_trades
-      WHERE received_at >= NOW() - INTERVAL '10 minutes'
+      WHERE received_at >= NOW() - INTERVAL '7 minutes'
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
         AND price IS NOT NULL
         AND price::numeric > 0
@@ -489,7 +489,28 @@ async function updateWindow10m() {
   snapshotStableHistory();
 }
 
-const STABLE_R1 = 1.2, STABLE_R2 = 110, STABLE_R3 = 0.5, STABLE_R4 = 0.3, STABLE_R5 = 7;
+const STABLE_R1 = 1.2, STABLE_R2 = 310, STABLE_R5_WINDOW = 7, STABLE_R5_MIN = 6;
+
+// R3/R5 共用阈值：按开盘价分档（"低于X按X算"向上取边界）
+// 开盘价 < 125 → 0.05%；125~267 → 0.04%；267~480 → 0.03%；480~1000 → 0.025%；≥1000 → 0.015%
+function getR35Thresh(openPrice) {
+  const p = Math.max(openPrice, 0);
+  if (p < 125)  return 0.0005;   // 0.05%
+  if (p < 267)  return 0.0004;   // 0.04%
+  if (p < 480)  return 0.0003;   // 0.03%
+  if (p < 1000) return 0.00025;  // 0.025%
+  return 0.00015;                 // 0.015%
+}
+
+// R4 阈值：按开盘价分档（价格低于最低边界按最低边界算）
+// < 200 → 0.3%；200~400 → 0.2%（低于300按300算）；400~800 → 0.15%（低于533.5按533.5算）；≥800 → 0.1%（低于1200按1200算）
+function getR4Thresh(openPrice) {
+  const p = Math.max(openPrice, 0);
+  if (p < 200)  return 0.003;    // 0.3%
+  if (p < 400)  return 0.002;    // 0.2%（低于300时按300算，阈值仍0.2%）
+  if (p < 800)  return 0.0015;   // 0.15%（低于533.5时按533.5算，阈值仍0.15%）
+  return 0.001;                   // 0.1%（低于1200时按1200算，阈值仍0.1%）
+}
 
 function snapshotStableHistory() {
   const now = new Date();
@@ -501,6 +522,7 @@ function snapshotStableHistory() {
 
   for (const row of rankingCache) {
     const price     = Number(row.last_price);
+    const openPrice = Number(row.open_price) || price;
     const changePct = Number(row.change_pct);
     if (!price) continue;
 
@@ -516,14 +538,15 @@ function snapshotStableHistory() {
     const firstMid = (bars[0].high + bars[0].low) / 2;
     const lastMid  = (bars[bars.length - 1].high + bars[bars.length - 1].low) / 2;
     const r4_pct   = lastMid > 0 ? Number((Math.abs(firstMid - lastMid) / lastMid * 100).toFixed(3)) : null;
-    const candleThresh = price >= 200 ? 0.003 : 0.005;
-    const r5_cnt = bars.filter(b => b.open > 0 && Math.abs(b.close - b.open) / b.open < candleThresh).length;
+    const r35Thresh  = getR35Thresh(openPrice);
+    const r5_bars  = bars.slice(-STABLE_R5_WINDOW);
+    const r5_cnt   = r5_bars.filter(b => b.open > 0 && Math.abs(b.close - b.open) / b.open < r35Thresh).length;
 
     if (r1_val >= STABLE_R1) continue;
     if (r2_vol <  STABLE_R2) continue;
-    if (r3_pct === null || r3_pct >= STABLE_R3) continue;
-    if (r4_pct === null || r4_pct >= STABLE_R4) continue;
-    if (r5_cnt <  STABLE_R5) continue;
+    if (r3_pct === null || r3_pct >= r35Thresh * 100) continue;
+    if (r4_pct === null || r4_pct >= getR4Thresh(openPrice) * 100) continue;
+    if (r5_cnt <  STABLE_R5_MIN) continue;
 
     if (!stableHistory.has(row.symbol)) stableHistory.set(row.symbol, []);
     const hist   = stableHistory.get(row.symbol);
@@ -1307,11 +1330,11 @@ app.get('/api/screener', (req, res) => {
 
 // === 稳定选股器 API ===
 // 在自由选股器基础上叠加 5 条稳定性规则（全部基于 window10m 内存缓存，不查库）
-// R1: 10分钟内 high-low < 现价 × 1.2%
-// R2: 10分钟内总成交量 >= 110
-// R3: |现价 - 10分钟收盘均价| / 均价 < 0.5%
-// R4: |首根中间价 - 末根中间价| / 末根中间价 < 0.3%（绝对值）
-// R5: 每分钟 |close-open|/open < 阈值（价格<200用0.5%，>=200用0.3%），至少7分钟满足
+// R1: 7分钟内 high-low < 现价 × 1.2%
+// R2: 7分钟内总成交量 >= 310
+// R3: |现价 - 7分钟收盘均价| / 均价 < 按开盘价分档阈值（0.05%/0.04%/0.03%/0.025%/0.015%）
+// R4: |首根中间价 - 末根中间价| / 末根中间价 < 按开盘价分档阈值（0.3%/0.2%/0.15%/0.1%）
+// R5: 最近7根K线中，|close-open|/open < R3/R5阈值 的分钟数 >= 6
 app.get('/api/screener-stable', (req, res) => {
   try {
     const q = req.query;
@@ -1344,20 +1367,21 @@ app.get('/api/screener-stable', (req, res) => {
 
       // ── window10m 数据 ──
       const bars = window10m.get(row.symbol);
+      const openPrice = Number(row.open_price) || price;
 
       // 数据不足时仍返回，但规则字段为 null（前端显示"—"）
       let r1_val = null, r2_vol = null, r3_pct = null, r4_pct = null, r5_cnt = null;
 
       if (bars && bars.length > 0) {
-        // R1: 10分钟振幅 % = (windowHigh - windowLow) / price * 100
+        // R1: 7分钟振幅 % = (windowHigh - windowLow) / price * 100
         const winHigh = Math.max(...bars.map(b => b.high));
         const winLow  = Math.min(...bars.map(b => b.low));
         r1_val = Number(((winHigh - winLow) / price * 100).toFixed(3));
 
-        // R2: 10分钟总成交量
+        // R2: 7分钟总成交量
         r2_vol = bars.reduce((s, b) => s + b.volume, 0);
 
-        // R3: |现价 - 10分钟收盘均价| / 均价 × 100 (%)
+        // R3: |现价 - 7分钟收盘均价| / 均价 × 100 (%)
         const avgClose = bars.reduce((s, b) => s + b.close, 0) / bars.length;
         r3_pct = avgClose > 0
           ? Number((Math.abs(price - avgClose) / avgClose * 100).toFixed(3))
@@ -1370,10 +1394,11 @@ app.get('/api/screener-stable', (req, res) => {
           ? Number((Math.abs(firstMid - lastMid) / lastMid * 100).toFixed(3))
           : null;
 
-        // R5: 安静蜡烛数（价格<200阈值0.5%，>=200阈值0.3%）
-        const candleThresh = price >= 200 ? 0.003 : 0.005;
-        r5_cnt = bars.filter(b =>
-          b.open > 0 && Math.abs(b.close - b.open) / b.open < candleThresh
+        // R5: 最近7根K线中安静蜡烛数（按开盘价分档阈值）
+        const r35Thresh = getR35Thresh(openPrice);
+        const r5_bars = bars.slice(-STABLE_R5_WINDOW);
+        r5_cnt = r5_bars.filter(b =>
+          b.open > 0 && Math.abs(b.close - b.open) / b.open < r35Thresh
         ).length;
       }
 
@@ -1397,12 +1422,12 @@ app.get('/api/screener-stable', (req, res) => {
         bid,
         ask,
         spread,
-        // 5条规则原始指标值（前端负责计算通过/失败和评分）
-        r1_val,   // 10min振幅%，< 1.2% 为通过
-        r2_vol,   // 10min总量，>= 110 为通过
-        r3_pct,   // 现价偏离均价%，< 0.5% 为通过
-        r4_pct,   // 首尾中间价漂移%，< 0.3% 为通过
-        r5_cnt,   // 安静分钟数，>= 7 为通过
+        // 5条规则原始指标值（前端负责计算通过/失败）
+        r1_val,   // 7min振幅%，< 1.2% 为通过
+        r2_vol,   // 7min总量，>= 310 为通过
+        r3_pct,   // 现价偏离均价%，按开盘价分档阈值
+        r4_pct,   // 首尾中间价漂移%，按开盘价分档阈值
+        r5_cnt,   // 最近7根K线中安静分钟数，>= 6 为通过
         bars_count: bars ? bars.length : 0,
       });
     }
@@ -1873,61 +1898,122 @@ async function ensureVolumeAlertSchema() {
   volumeSchemaReady = true;
 }
 
-// [FIX 6] updateDailySummary 全天汇总模式
-// [FIX H] open_price 使用 CASE 保护，一旦写入不再覆盖
-// [FIX I] 过滤 trade_time 晚于 received_at 当天时刻的补推历史单
-// [FIX J] 去掉 2 分钟窗口改为全天汇总，close/high/low/volume 直接覆盖，避免重复累加
-// [FIX K] 开市前（北京时间 08:00 前）直接跳过，防止补推历史单污染 open_price
-// [FIX L] open_price 自纠错：若已写入值与新算出值偏差 > 20%，允许覆盖（应对极少数脏数据锁定场景）
+// updateDailySummary 增量模式
+// 原全天汇总模式（FIX 6/H/I/J/K/L）改为增量更新，彻底避免全天重算：
+//
+// Step 1（每次执行）：只扫 lastDailySummaryRunAt 之后的新成交（60s窗口），
+//   close/high/low/volume 用 GREATEST/LEAST/累加合并到已有行，open_price 传 NULL 跳过。
+//
+// Step 2（仅在必要时执行）：open_price 补写/自纠错
+//   - openPriceDone = false（首次或纠错触发）时才执行，写完后置 true，此后跳过
+//   - DISTINCT ON 取当日最早一笔，不再 array_agg 全量排序
+//   - FIX H：已写入则不覆盖；FIX L：偏差 >20% 允许纠正
+//
+// FIX K 保留：08:00 前跳过
+// FIX I 保留：过滤补推历史单
+
+let lastDailySummaryRunAt = null;  // 增量扫描起点
+let openPriceDone = false;         // 当日 open_price 已写完，跳过 Step 2
+
 async function updateDailySummary() {
-  // [FIX K] 非交易时段不写入，避免凌晨补推数据锁定错误 open_price
+  // [FIX K] 非交易时段不写入
   const nowBeijing = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
   const beijingMins = nowBeijing.getHours() * 60 + nowBeijing.getMinutes();
-  if (beijingMins < 8 * 60) {
-    // 08:00 前静默跳过，无需打日志
-    return;
+  if (beijingMins < 8 * 60) return;
+
+  // 正确取北京时间日期字符串（直接格式化，不用 toISOString 避免 UTC 偏差）
+  const yy  = nowBeijing.getFullYear();
+  const mm  = String(nowBeijing.getMonth() + 1).padStart(2, '0');
+  const dd  = String(nowBeijing.getDate()).padStart(2, '0');
+  const todayStr = `${yy}-${mm}-${dd}`;
+
+  // 跨天兜底重置
+  if (updateDailySummary._lastDate !== todayStr) {
+    updateDailySummary._lastDate = todayStr;
+    lastDailySummaryRunAt = null;
+    openPriceDone = false;
   }
+
+  // 增量起点：首次运行取当日08:00（北京时间），之后取上次成功时间
+  const dayOpenStr = `${todayStr}T08:00:00+08:00`;
+  const scanFrom = lastDailySummaryRunAt ?? dayOpenStr;
+  const scanTo   = new Date().toISOString();
 
   const client = await pool.connect();
   try {
-    await client.query('SET statement_timeout = 15000');
-    const sql = `
+    // ── Step 1：增量 upsert（close/high/low/volume）──────────────────────────
+    // 首次运行扫当日08:00至今（全天冷启动），之后每轮只扫约60s增量。
+    // 给 Step 1 单独设 timeout：首次全天量允许更长，正常增量极快。
+    await client.query('SET statement_timeout = 25000');
+    await client.query(`
       INSERT INTO market_data.daily_summary
         (symbol, trade_date, open_price, close_price, high_price, low_price, total_volume)
       SELECT
         symbol,
-        (received_at AT TIME ZONE 'Asia/Shanghai')::date AS trade_date,
-        (array_agg(price::numeric ORDER BY received_at ASC, id ASC))[1]  AS open_price,
+        (received_at AT TIME ZONE 'Asia/Shanghai')::date           AS trade_date,
+        NULL::numeric                                               AS open_price,
         (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close_price,
-        MAX(price::numeric)  AS high_price,
-        MIN(price::numeric)  AS low_price,
-        SUM(size::numeric)   AS total_volume
-      FROM tos_trades
-      WHERE received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
+        MAX(price::numeric)                                         AS high_price,
+        MIN(price::numeric)                                         AS low_price,
+        SUM(size::numeric)                                          AS total_volume
+      FROM market_data.tos_trades
+      WHERE received_at >  $1::timestamptz
+        AND received_at <= $2::timestamptz
+        AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
         AND price IS NOT NULL AND price::numeric > 0
         AND market_time IS NOT NULL AND market_time != ''
-        AND trim(trade_time)::time <= (received_at AT TIME ZONE 'Asia/Shanghai')::time + interval '1 second'
+        AND trim(trade_time)::time
+              <= (received_at AT TIME ZONE 'Asia/Shanghai')::time + interval '1 second'
       GROUP BY symbol, (received_at AT TIME ZONE 'Asia/Shanghai')::date
       ON CONFLICT (symbol, trade_date) DO UPDATE SET
-        -- [FIX L] 正常情况保留已写入的 open_price 不覆盖；
-        --         但若偏差超过 20%，说明之前锁定的是脏数据，允许纠正。
-        open_price   = CASE
-                         WHEN daily_summary.open_price IS NULL
-                           THEN EXCLUDED.open_price
-                         WHEN daily_summary.open_price > 0
-                           AND ABS(daily_summary.open_price - EXCLUDED.open_price)
-                               / daily_summary.open_price > 0.20
-                           THEN EXCLUDED.open_price
-                         ELSE daily_summary.open_price
-                       END,
         close_price  = EXCLUDED.close_price,
-        high_price   = EXCLUDED.high_price,
-        low_price    = EXCLUDED.low_price,
-        total_volume = EXCLUDED.total_volume
-    `;
-    await client.query(sql);
+        high_price   = GREATEST(daily_summary.high_price,  EXCLUDED.high_price),
+        low_price    = LEAST(daily_summary.low_price,      EXCLUDED.low_price),
+        total_volume = COALESCE(daily_summary.total_volume, 0) + EXCLUDED.total_volume
+    `, [scanFrom, scanTo]);
+
+    // Step 1 成功后立即推进时间戳，即使 Step 2 失败也不会丢 close/high/low/volume
+    lastDailySummaryRunAt = scanTo;
+
+    // ── Step 2：open_price 补写（仅首次或偏差纠错时执行）────────────────────
+    // Step 2 单独设 timeout，与 Step 1 互不干扰。
+    // openPriceDone = true 后整个 Step 2 跳过，日常几乎零开销。
+    if (!openPriceDone) {
+      await client.query('SET statement_timeout = 20000');
+      const fixResult = await client.query(`
+        UPDATE market_data.daily_summary ds
+        SET open_price = sub.open_price
+        FROM (
+          SELECT DISTINCT ON (symbol)
+            symbol,
+            price::numeric AS open_price
+          FROM market_data.tos_trades
+          WHERE received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
+            AND price IS NOT NULL AND price::numeric > 0
+            AND market_time IS NOT NULL AND market_time != ''
+            AND trim(trade_time)::time
+                  <= (received_at AT TIME ZONE 'Asia/Shanghai')::time + interval '1 second'
+          ORDER BY symbol, received_at ASC, id ASC
+        ) sub
+        WHERE ds.symbol     = sub.symbol
+          AND ds.trade_date = current_date
+          AND (
+            ds.open_price IS NULL
+            OR (
+              ds.open_price > 0
+              AND ABS(ds.open_price - sub.open_price) / ds.open_price > 0.20
+            )
+          )
+      `);
+
+      if (fixResult.rowCount === 0) {
+        openPriceDone = true;  // 无需再写，后续跳过 Step 2
+      }
+    }
+
   } catch (err) {
     console.error('[DailySummary] Update failed:', err.message);
+    // Step 1 成功则 lastDailySummaryRunAt 已推进；Step 2 失败不影响增量窗口
   } finally {
     await client.query('SET statement_timeout = 0').catch(() => {});
     client.release();
@@ -2001,50 +2087,68 @@ async function scanAllVolumeAlerts() {
 
     const ruleId = `checkpoint_${cp.elapsed_minutes}min_${Math.round(cp.expected_pct * 100)}pct`;
 
-    const sql = `
-      WITH hist_ranked AS (
-        SELECT symbol,
-               daily_volume,
-               PERCENT_RANK() OVER (PARTITION BY symbol ORDER BY daily_volume) AS pct_rank,
-               COUNT(*) OVER (PARTITION BY symbol) AS total_days
-        FROM tos_daily_volume
-        WHERE trade_date >= ($1::date - $2 * INTERVAL '1 day')
-          AND trade_date < $1::date
-      ),
-      hist AS (
-        SELECT symbol,
-               AVG(daily_volume) AS avg_vol
-        FROM hist_ranked
-        WHERE total_days >= 1
-          AND pct_rank >= 0.1 AND pct_rank <= 0.9
-        GROUP BY symbol
-      ),
-      today_vol AS (
-        SELECT symbol, daily_volume AS cum_vol
-        FROM tos_daily_volume
-        WHERE trade_date = $1::date
-      )
-      INSERT INTO k_volume_alerts(symbol, bucket, volume_ratio, current_cum_vol, avg_daily_vol, rule_id, created_at)
-      SELECT t.symbol,
-             $1::date::timestamp AS bucket,
-             t.cum_vol / NULLIF(h.avg_vol, 0) AS volume_ratio,
-             t.cum_vol,
-             ROUND(h.avg_vol, 2),
-             $3,
-             now()
-      FROM today_vol t
-      JOIN hist h USING (symbol)
-      WHERE h.avg_vol > 0
-        AND (t.cum_vol / NULLIF(h.avg_vol, 0)) >= $4::numeric
-      ON CONFLICT (symbol, bucket, rule_id) DO NOTHING
-      RETURNING symbol;
-    `;
-
     try {
-      const res = await pool.query(sql, [today, VOLUME_HISTORY_DAYS, ruleId, cp.expected_pct]);
-      totalTriggered += res.rowCount;
-      if (res.rowCount > 0) {
-        console.log(`[VolumeMonitor] Checkpoint ${cp.label} (${ruleId}) triggered for ${res.rowCount} symbols`);
+      // 先查出需要触发的 symbol 列表，再分批 INSERT，避免单事务锁占数百秒
+      const selectSql = `
+        WITH hist_ranked AS (
+          SELECT symbol,
+                 daily_volume,
+                 PERCENT_RANK() OVER (PARTITION BY symbol ORDER BY daily_volume) AS pct_rank,
+                 COUNT(*) OVER (PARTITION BY symbol) AS total_days
+          FROM tos_daily_volume
+          WHERE trade_date >= ($1::date - $2 * INTERVAL '1 day')
+            AND trade_date < $1::date
+        ),
+        hist AS (
+          SELECT symbol,
+                 AVG(daily_volume) AS avg_vol
+          FROM hist_ranked
+          WHERE total_days >= 1
+            AND pct_rank >= 0.1 AND pct_rank <= 0.9
+          GROUP BY symbol
+        ),
+        today_vol AS (
+          SELECT symbol, daily_volume AS cum_vol
+          FROM tos_daily_volume
+          WHERE trade_date = $1::date
+        )
+        SELECT t.symbol,
+               t.cum_vol / NULLIF(h.avg_vol, 0) AS volume_ratio,
+               t.cum_vol,
+               ROUND(h.avg_vol, 2) AS avg_vol
+        FROM today_vol t
+        JOIN hist h USING (symbol)
+        WHERE h.avg_vol > 0
+          AND (t.cum_vol / NULLIF(h.avg_vol, 0)) >= $4::numeric
+      `;
+
+      const candidates = await pool.query(selectSql, [today, VOLUME_HISTORY_DAYS, ruleId, cp.expected_pct]);
+
+      if (candidates.rowCount === 0) continue;
+
+      // 分批 INSERT，每批100条，避免单次大事务
+      const BATCH_SIZE = 100;
+      let triggered = 0;
+      for (let i = 0; i < candidates.rows.length; i += BATCH_SIZE) {
+        const batch = candidates.rows.slice(i, i + BATCH_SIZE);
+        const values = batch.map((_, j) => {
+          const base = j * 4;
+          return `($${base+1}, $${base+2}::date::timestamp, $${base+3}, $${base+4}, $${base+5}, '${ruleId}', now())`;
+        }).join(',');
+        const params = batch.flatMap(r => [r.symbol, today, r.volume_ratio, r.cum_vol, r.avg_vol]);
+        const insertSql = `
+          INSERT INTO k_volume_alerts
+            (symbol, bucket, volume_ratio, current_cum_vol, avg_daily_vol, rule_id, created_at)
+          VALUES ${values}
+          ON CONFLICT (symbol, bucket, rule_id) DO NOTHING
+        `;
+        const batchRes = await pool.query(insertSql, params);
+        triggered += batchRes.rowCount;
+      }
+
+      totalTriggered += triggered;
+      if (triggered > 0) {
+        console.log(`[VolumeMonitor] Checkpoint ${cp.label} (${ruleId}) triggered for ${triggered} symbols`);
       }
     } catch (err) {
       console.error(`[VolumeMonitor] Error checking checkpoint ${cp.label}:`, err);
@@ -2279,7 +2383,10 @@ function startAlertMonitor() {
     if (h === 7 && m === 55 && lastHistoryClearDate !== todayStr) {
       lastHistoryClearDate = todayStr;
       stableHistory.clear();
+      lastDailySummaryRunAt = null;
+      openPriceDone = false;
       console.log('[StableHistory] cleared for new trading day');
+      console.log('[DailySummary] open_price flag reset for new trading day');
     }
   }, 60000);
 }

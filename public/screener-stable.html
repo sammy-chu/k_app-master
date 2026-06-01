@@ -131,7 +131,7 @@
   .lookup-sym .fail-some { color: #ef5350; }
   .lookup-sym .no-data { color: #888; }
   .rule-detail-grid {
-    display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px;
     margin-top: 6px;
   }
   .rule-card {
@@ -217,7 +217,7 @@
   @media (max-width: 900px) {
     .filter-panel { gap: 10px; }
     .header-bar { flex-direction: column; align-items: flex-start; gap: 8px; }
-    .rule-detail-grid { grid-template-columns: 1fr 1fr; }
+    .rule-detail-grid { grid-template-columns: repeat(2, 1fr); }
   }
 </style>
 </head>
@@ -240,7 +240,7 @@
   <!-- 标题栏 -->
   <div class="header-bar">
     <h1 class="title">稳定选股器
-      <span style="font-size:0.6em;color:#555;margin-left:8px;">5条规则全部通过</span>
+      <span style="font-size:0.6em;color:#555;margin-left:8px;">6条规则全部通过</span>
     </h1>
     <div class="header-right">
       <span id="status-text" style="font-size:12px;color:#888;">
@@ -317,6 +317,7 @@
       <span class="rule-tag">R3 价偏分档</span>
       <span class="rule-tag">R4 漂移分档</span>
       <span class="rule-tag">R5 ≥6/7分钟安静</span>
+      <span class="rule-tag">R6 触轨a≥3或b≥3</span>
     </div>
     <span id="count-info">—</span>
   </div>
@@ -336,10 +337,11 @@
         <th onclick="sortBy('r3_pct')" title="现价偏离均价%，按开盘价分档">R3 价偏%</th>
         <th onclick="sortBy('r4_pct')" title="首尾中间价漂移%，按开盘价分档">R4 漂%</th>
         <th onclick="sortBy('r5_cnt')" title="最近7分钟内安静分钟数，≥6">R5 分钟</th>
+        <th onclick="sortBy('r6_a')" title="7分钟触下轨(a)和上轨(b)的K线数，a≥3或b≥3才通过">R6 触轨</th>
       </tr>
     </thead>
     <tbody id="tbody">
-      <tr class="empty-row"><td colspan="11"><span class="spinner"></span>加载中...</td></tr>
+      <tr class="empty-row"><td colspan="12"><span class="spinner"></span>加载中...</td></tr>
     </tbody>
   </table>
 
@@ -356,46 +358,66 @@ let countdown  = 10;
 let lastParams = {};
 let isFetching = false;
 
-// ── 宽限期状态 ────────────────────────────────────────────────────────────
-// symbol -> { exitAt: Date, exitPrice: number, pinned: boolean, pinnedAt: Date }
+// ── 退出监控与置顶状态 ────────────────────────────────────────────────────
+// 新规则：退出后立刻从列表消失；退出后5分钟内若任意相邻分钟波动≥0.5%，置顶2分钟后消失。
 const graceMap = new Map();
 let prevPassSymbols = new Set();  // 上一次满足条件的 symbol 集合
-const GRACE_MS   = 2 * 60 * 1000;   // 2分钟宽限期
-const GRACE_VOL  = 0.005;            // 0.5% 波动触发置顶
+const MONITOR_MS     = 5 * 60 * 1000;  // 退出后监控5分钟
+const PINNED_MS      = 2 * 60 * 1000;  // 置顶显示2分钟
+const MOVE_THRESH    = 0.005;           // 分钟级波动阈值 0.5%
+const MIN_INTERVAL_MS = 50 * 1000;     // 相邻采样至少50秒才算相邻分钟
 
 function updateGrace(passSymbols, allRows) {
   const now = Date.now();
 
-  // 1. 只有之前在通过列表里的股票退出时才加入宽限期
+  // 1. 更新已在监控/置顶中的股票
   for (const [sym, g] of graceMap) {
-    // 更新宽限期内股票的当前数据和波动检测
     const curRow = allRows.find(r => r.symbol === sym);
-    if (curRow && g.exitPrice > 0) {
-      const chg = Math.abs(Number(curRow.last_price) - g.exitPrice) / g.exitPrice;
-      if (chg >= GRACE_VOL && !g.pinned) {
-        g.pinned   = true;
-        g.pinnedAt = now;
-      }
+    const price  = curRow ? Number(curRow.last_price) : 0;
+
+    if (price > 0) {
       g.row = curRow;
+      // 追加价格采样（约10s一次）
+      g.priceHistory.push({ price, ts: now });
+      // 检测相邻分钟（间隔≥50s）波动是否≥0.5%
+      if (!g.pinned) {
+        const hist = g.priceHistory;
+        for (let i = hist.length - 1; i >= 1; i--) {
+          if (hist[i].ts - hist[i - 1].ts >= MIN_INTERVAL_MS) {
+            const move = Math.abs(hist[i].price - hist[i - 1].price) / hist[i - 1].price;
+            if (move >= MOVE_THRESH) {
+              g.pinned   = true;
+              g.pinnedAt = now;
+            }
+            break; // 只看最近一对相邻分钟采样
+          }
+        }
+      }
     }
-    // 清理过期
-    if (now - g.exitAt > GRACE_MS) graceMap.delete(sym);
+
+    // 清理：未置顶且监控期已过，或置顶期已过
+    const monitorExpired = now - g.exitAt > MONITOR_MS;
+    const pinnedExpired  = g.pinned && (now - g.pinnedAt > PINNED_MS);
+    if ((!g.pinned && monitorExpired) || pinnedExpired) {
+      graceMap.delete(sym);
+    }
   }
 
-  // 2. 检查之前通过的股票是否刚退出（只处理 prevPassSymbols 里有、现在没有的）
+  // 2. 之前通过的股票刚退出 → 加入监控
   for (const sym of prevPassSymbols) {
     if (!passSymbols.has(sym) && !graceMap.has(sym)) {
-      const row = allRows.find(r => r.symbol === sym);
-      if (!row) continue;  // 该股票已不在今日数据中，跳过
+      const row   = allRows.find(r => r.symbol === sym);
+      if (!row) continue;
+      const price = Number(row.last_price) || 0;
       graceMap.set(sym, {
-        exitAt:    now,
-        exitPrice: Number(row.last_price) || 0,
-        pinned:    false,
-        pinnedAt:  null,
+        exitAt:       now,
+        priceHistory: price > 0 ? [{ price, ts: now }] : [],
+        pinned:       false,
+        pinnedAt:     null,
         row,
       });
     }
-    // 重新满足条件，清除宽限期
+    // 重新满足条件 → 退出监控
     if (passSymbols.has(sym) && graceMap.has(sym)) {
       graceMap.delete(sym);
     }
@@ -406,21 +428,21 @@ function updateGrace(passSymbols, allRows) {
 }
 
 function getGraceRows() {
+  // 只返回已触发置顶且置顶期未过的行（未触发置顶的静默监控，不显示在列表中）
   const now = Date.now();
   return [...graceMap.entries()]
-    .filter(([, g]) => now - g.exitAt <= GRACE_MS && g.row)
-    .map(([sym, g]) => ({
+    .filter(([, g]) => g.pinned && g.row && now - g.pinnedAt <= PINNED_MS)
+    .map(([, g]) => ({
       ...g.row,
       _grace:    true,
-      _pinned:   g.pinned,
-      _exitAt:   g.exitAt,
-      _remainMs: GRACE_MS - (now - g.exitAt),
+      _pinned:   true,
+      _remainMs: PINNED_MS - (now - g.pinnedAt),
     }));
 }
 
 const SORT_KEYS = [
   'symbol','last_price','change_pct','change_amount','total_volume','vol_ratio',
-  'r1_val','r2_vol','r3_pct','r4_pct','r5_cnt'
+  'r1_val','r2_vol','r3_pct','r4_pct','r5_cnt','r6_a'
 ];
 
 // ── 分档阈值函数（与 server.js 保持一致）─────────────────────────────────
@@ -440,7 +462,7 @@ function getR4Thresh(openPrice) {
   return 0.1;
 }
 
-// ── RULE EVAL（固定5条，全部必须通过）─────────────────────────────────────
+// ── RULE EVAL（固定6条，全部必须通过）─────────────────────────────────────
 function evalRow(row) {
   const op = Number(row.open_price) || Number(row.last_price) || 0;
   const r35T = getR35Thresh(op);
@@ -450,9 +472,14 @@ function evalRow(row) {
   const r3_pass = row.r3_pct !== null && row.r3_pct !== undefined ? row.r3_pct < r35T  : null;
   const r4_pass = row.r4_pct !== null && row.r4_pct !== undefined ? row.r4_pct < r4T   : null;
   const r5_pass = row.r5_cnt !== null && row.r5_cnt !== undefined ? row.r5_cnt >= 6    : null;
+  // R6: 7分钟内触下轨(a)和触上轨(b)的K线数，a >= 3 或 b >= 3 才通过
+  const r6_pass = (row.r6_a !== null && row.r6_a !== undefined &&
+                   row.r6_b !== null && row.r6_b !== undefined)
+    ? (row.r6_a >= 3 || row.r6_b >= 3)
+    : null;
   const passAll = r1_pass === true && r2_pass === true && r3_pass === true
-               && r4_pass === true && r5_pass === true;
-  return { r1_pass, r2_pass, r3_pass, r4_pass, r5_pass, passAll, r35T, r4T };
+               && r4_pass === true && r5_pass === true && r6_pass === true;
+  return { r1_pass, r2_pass, r3_pass, r4_pass, r5_pass, r6_pass, passAll, r35T, r4T };
 }
 
 // ── INPUTS ────────────────────────────────────────────────────────────────
@@ -524,7 +551,7 @@ function run() {
   }
 }
 
-// ── APPLY FILTER（只保留5条规则全部通过的）────────────────────────────────
+// ── APPLY FILTER（只保留6条规则全部通过的）────────────────────────────────
 function applyFilter() {
   const priceMin  = getV('priceMin');
   const priceMax  = getV('priceMax');
@@ -572,19 +599,16 @@ function applyFilter() {
     return va < vb ? sortDir : va > vb ? -sortDir : 0;
   });
 
-  // 宽限期行：置顶的排最前，其余按退出时间降序
+  // 置顶行：按置顶触发时间降序排在最前
   const graceRows = getGraceRows();
-  const pinnedRows = graceRows.filter(r => r._pinned)
-    .sort((a, b) => b._exitAt - a._exitAt);
-  const gracePlainRows = graceRows.filter(r => !r._pinned)
-    .sort((a, b) => b._exitAt - a._exitAt);
+  const pinnedRows = [...graceRows].sort((a, b) => b._remainMs - a._remainMs);
 
-  sortedData = [...pinnedRows, ...gracePlainRows, ...sorted];
+  sortedData = [...pinnedRows, ...sorted];
 
   const total = allData.filter(r => evalRow(r).passAll).length;
   document.getElementById('count-info').textContent =
     `全部通过 ${total} 只 · 当前筛选 ${sorted.length} 只` +
-    (graceRows.length ? ` · 宽限期 ${graceRows.length} 只` : '');
+    (graceRows.length ? ` · 置顶中 ${graceRows.length} 只` : '');
 
   renderTable();
 }
@@ -596,7 +620,7 @@ function renderTable() {
     const msg = allData.length === 0
       ? '<span class="spinner"></span>加载中...'
       : '暂无符合条件的股票';
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="14">${msg}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="12">${msg}</td></tr>`;
     return;
   }
 
@@ -630,14 +654,13 @@ function buildRowHTML(r) {
   const vPct = Math.min(100, maxVol > 0 ? vol / maxVol * 100 : 0);
   const vr   = r.vol_ratio || 0;
 
-  // 宽限期徽标
+  // 置顶徽标
   let graceBadge = '';
-  if (r._grace || r._pinned) {
+  if (r._pinned) {
     const remainSec = Math.max(0, Math.ceil((r._remainMs || 0) / 1000));
     const mm = String(Math.floor(remainSec / 60)).padStart(2, '0');
     const ss = String(remainSec % 60).padStart(2, '0');
-    const label = r._pinned ? `📌 置顶 ${mm}:${ss}` : `⏱ ${mm}:${ss}`;
-    graceBadge = `<span class="grace-badge">${label}</span>`;
+    graceBadge = `<span class="grace-badge">📌 置顶 ${mm}:${ss}</span>`;
   }
 
   // 规则列：全部通过才显示，所以值只会是绿色
@@ -654,7 +677,8 @@ function buildRowHTML(r) {
     <td class="r-pass">${rVal(r.r2_vol, v => fmtVol(v))}</td>
     <td class="r-pass">${rVal(r.r3_pct, v => v.toFixed(2)+'%')}</td>
     <td class="r-pass">${rVal(r.r4_pct, v => v.toFixed(2)+'%')}</td>
-    <td class="r-pass">${rVal(r.r5_cnt, v => v+'分')}</td>`;
+    <td class="r-pass">${rVal(r.r5_cnt, v => v+'分')}</td>
+    <td class="r-pass">${r.r6_a != null ? `a:${r.r6_a} b:${r.r6_b}` : '—'}</td>`;
 }
 
 // ── 代码查询 ──────────────────────────────────────────────────────────────
@@ -703,7 +727,7 @@ function renderHistory(sym, data) {
   if (records.length === 0) {
     panel.innerHTML = `
       <div class="history-header"><strong>${sym}</strong><span>今日历史时间点</span></div>
-      <div class="history-empty">今日暂无满足全部5条规则的时间点</div>`;
+      <div class="history-empty">今日暂无满足全部6条规则的时间点</div>`;
     return;
   }
   const latestTime = records[records.length - 1].time;
@@ -718,6 +742,7 @@ function renderHistory(sym, data) {
       { label: 'R3价偏', v: rec.r3_pct != null ? rec.r3_pct.toFixed(2)+'%' : '—' },
       { label: 'R4漂移', v: rec.r4_pct != null ? rec.r4_pct.toFixed(2)+'%' : '—' },
       { label: 'R5安静', v: rec.r5_cnt != null ? rec.r5_cnt+'分' : '—' },
+      { label: 'R6触轨', v: rec.r6_a   != null ? `a${rec.r6_a}/b${rec.r6_b}` : '—' },
     ].map(x => `<div class="tl-val-item">${x.label} <span>${x.v}</span></div>`).join('');
     const priceStr = rec.last_price != null
       ? `<span class="${pcls}" style="margin-left:6px;font-size:11px;">${fmt(rec.last_price,2)} ${sign}${pct.toFixed(2)}%</span>` : '';
@@ -797,6 +822,13 @@ function renderLookup(sym) {
       threshold: '≥ 6 / 7分钟',
       desc: '最近7根K线｜阈值同R3按开盘价分档',
     },
+    {
+      title: 'R6 触轨计数',
+      pass: ev.r6_pass,
+      value: row.r6_a != null ? `a=${row.r6_a} / b=${row.r6_b}` : '—',
+      threshold: 'a≥3 或 b≥3',
+      desc: '下轨15%触底(a) / 上轨85%触顶(b)',
+    },
   ];
 
   const cardsHTML = cards.map(c => {
@@ -844,12 +876,13 @@ setInterval(() => {
   }
   document.getElementById('refresh-timer').textContent = `${countdown}s 后刷新`;
 
-  // 宽限期倒计时每秒刷新（如果有宽限期股票）
-  if (graceMap.size > 0) {
-    // 清理过期
+  // 置顶倒计时每秒刷新（如果有置顶中的股票）
+  const hasPinned = [...graceMap.values()].some(g => g.pinned);
+  if (hasPinned) {
+    // 清理置顶期已过的条目
     const now = Date.now();
     for (const [sym, g] of graceMap) {
-      if (now - g.exitAt > GRACE_MS) graceMap.delete(sym);
+      if (g.pinned && now - g.pinnedAt > PINNED_MS) graceMap.delete(sym);
     }
     renderTable();
   }

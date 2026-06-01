@@ -444,7 +444,7 @@ async function updatePriceWindow() {
   }
 }
 
-// [Window7m] 7分钟每分钟 OHLCV 聚合缓存（方案A: GROUP BY）
+// [Window10m] 10分钟每分钟 OHLCV 聚合缓存（方案A: GROUP BY）
 // 走 idx_tos_trades_received_at 索引，实测 ~71ms / 31628 行 / 2839 bars
 // 仅用 pricePool，与其他 pricePool 任务完全隔离，不影响任何现有功能
 async function updateWindow10m() {
@@ -461,7 +461,7 @@ async function updateWindow10m() {
         (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close,
         COALESCE(SUM(size::numeric), 0)                                   AS volume
       FROM tos_trades
-      WHERE received_at >= NOW() - INTERVAL '7 minutes'
+      WHERE received_at >= NOW() - INTERVAL '10 minutes'
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
         AND price IS NOT NULL
         AND price::numeric > 0
@@ -489,7 +489,7 @@ async function updateWindow10m() {
   snapshotStableHistory();
 }
 
-const STABLE_R1 = 1.2, STABLE_R2 = 310, STABLE_R5_WINDOW = 7, STABLE_R5_MIN = 6;
+const STABLE_R1 = 1.2, STABLE_R2 = 310, STABLE_R5_WINDOW = 10, STABLE_R5_MIN = 6;
 
 // R3/R5 共用阈值：按开盘价分档（"低于X按X算"向上取边界）
 // 开盘价 < 125 → 0.05%；125~267 → 0.04%；267~480 → 0.03%；480~1000 → 0.025%；≥1000 → 0.015%
@@ -548,11 +548,22 @@ function snapshotStableHistory() {
     if (r4_pct === null || r4_pct >= getR4Thresh(openPrice) * 100) continue;
     if (r5_cnt <  STABLE_R5_MIN) continue;
 
+    // R6: 10分钟内触下轨/上轨的K线数，a >= 3 或 b >= 3 才通过
+    const r6Range = winHigh - winLow;
+    let r6_a = 0, r6_b = 0;
+    if (r6Range > 0) {
+      const priceA = winLow + r6Range * 0.15;
+      const priceB = winLow + r6Range * 0.85;
+      r6_a = bars.filter(b => b.low  < priceA).length;
+      r6_b = bars.filter(b => b.high > priceB).length;
+    }
+    if (r6_a < 3 && r6_b < 3) continue;
+
     if (!stableHistory.has(row.symbol)) stableHistory.set(row.symbol, []);
     const hist   = stableHistory.get(row.symbol);
     const minute = timeStr.slice(0, 5);
     const last   = hist[hist.length - 1];
-    const entry  = { time: timeStr, r1_val, r2_vol, r3_pct, r4_pct, r5_cnt, last_price: price, change_pct: changePct };
+    const entry  = { time: timeStr, r1_val, r2_vol, r3_pct, r4_pct, r5_cnt, r6_a, r6_b, last_price: price, change_pct: changePct };
     if (last && last.time.slice(0, 5) === minute) {
       hist[hist.length - 1] = entry;
     } else {
@@ -1329,12 +1340,14 @@ app.get('/api/screener', (req, res) => {
 });
 
 // === 稳定选股器 API ===
-// 在自由选股器基础上叠加 5 条稳定性规则（全部基于 window10m 内存缓存，不查库）
+// 在自由选股器基础上叠加 6 条稳定性规则（全部基于 window10m 内存缓存，不查库）
 // R1: 7分钟内 high-low < 现价 × 1.2%
 // R2: 7分钟内总成交量 >= 310
 // R3: |现价 - 7分钟收盘均价| / 均价 < 按开盘价分档阈值（0.05%/0.04%/0.03%/0.025%/0.015%）
 // R4: |首根中间价 - 末根中间价| / 末根中间价 < 按开盘价分档阈值（0.3%/0.2%/0.15%/0.1%）
 // R5: 最近7根K线中，|close-open|/open < R3/R5阈值 的分钟数 >= 6
+// R6: 7分钟周期内，触下轨(low < A)的K线数 >= 3，或触上轨(high > B)的K线数 >= 3 才通过
+//     A = winLow + (winHigh - winLow) * 0.15，B = winLow + (winHigh - winLow) * 0.85
 app.get('/api/screener-stable', (req, res) => {
   try {
     const q = req.query;
@@ -1371,6 +1384,7 @@ app.get('/api/screener-stable', (req, res) => {
 
       // 数据不足时仍返回，但规则字段为 null（前端显示"—"）
       let r1_val = null, r2_vol = null, r3_pct = null, r4_pct = null, r5_cnt = null;
+      let r6_a = null, r6_b = null;
 
       if (bars && bars.length > 0) {
         // R1: 7分钟振幅 % = (windowHigh - windowLow) / price * 100
@@ -1400,6 +1414,21 @@ app.get('/api/screener-stable', (req, res) => {
         r5_cnt = r5_bars.filter(b =>
           b.open > 0 && Math.abs(b.close - b.open) / b.open < r35Thresh
         ).length;
+
+        // R6: 7分钟内触下轨/上轨的K线数（a >= 3 或 b >= 3 才通过）
+        // 预警价A = winLow + (winHigh - winLow) * 0.15（下轨）
+        // 预警价B = winLow + (winHigh - winLow) * 0.85（上轨）
+        const r6Range = winHigh - winLow;
+        if (r6Range > 0) {
+          const priceA = winLow + r6Range * 0.15;
+          const priceB = winLow + r6Range * 0.85;
+          r6_a = bars.filter(b => b.low  < priceA).length;
+          r6_b = bars.filter(b => b.high > priceB).length;
+        } else {
+          // 所有K线价格完全相同，无上下轨意义，视为不触轨
+          r6_a = 0;
+          r6_b = 0;
+        }
       }
 
       // quote
@@ -1428,6 +1457,8 @@ app.get('/api/screener-stable', (req, res) => {
         r3_pct,   // 现价偏离均价%，按开盘价分档阈值
         r4_pct,   // 首尾中间价漂移%，按开盘价分档阈值
         r5_cnt,   // 最近7根K线中安静分钟数，>= 6 为通过
+        r6_a,     // 触下轨(low < A)的K线数，a >= 3 或 b >= 3 为通过
+        r6_b,     // 触上轨(high > B)的K线数，a >= 3 或 b >= 3 为通过
         bars_count: bars ? bars.length : 0,
       });
     }
