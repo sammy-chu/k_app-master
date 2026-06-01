@@ -489,7 +489,7 @@ async function updateWindow10m() {
   snapshotStableHistory();
 }
 
-const STABLE_R1 = 1.2, STABLE_R2 = 110, STABLE_R3 = 0.5, STABLE_R4 = 0.3, STABLE_R5 = 7;
+const STABLE_R1 = 1.2, STABLE_R2 = 110, STABLE_R3 = 0.5, STABLE_R4 = 0.3, STABLE_R5 = 6, STABLE_R5_WINDOW = 7;
 
 function snapshotStableHistory() {
   const now = new Date();
@@ -517,7 +517,8 @@ function snapshotStableHistory() {
     const lastMid  = (bars[bars.length - 1].high + bars[bars.length - 1].low) / 2;
     const r4_pct   = lastMid > 0 ? Number((Math.abs(firstMid - lastMid) / lastMid * 100).toFixed(3)) : null;
     const candleThresh = price >= 200 ? 0.003 : 0.005;
-    const r5_cnt = bars.filter(b => b.open > 0 && Math.abs(b.close - b.open) / b.open < candleThresh).length;
+    const r5_bars = bars.slice(-STABLE_R5_WINDOW);
+    const r5_cnt = r5_bars.filter(b => b.open > 0 && Math.abs(b.close - b.open) / b.open < candleThresh).length;
 
     if (r1_val >= STABLE_R1) continue;
     if (r2_vol <  STABLE_R2) continue;
@@ -1370,9 +1371,10 @@ app.get('/api/screener-stable', (req, res) => {
           ? Number((Math.abs(firstMid - lastMid) / lastMid * 100).toFixed(3))
           : null;
 
-        // R5: 安静蜡烛数（价格<200阈值0.5%，>=200阈值0.3%）
+        // R5: 安静蜡烛数（取最近7根K线，价格<200阈值0.5%，>=200阈值0.3%）
         const candleThresh = price >= 200 ? 0.003 : 0.005;
-        r5_cnt = bars.filter(b =>
+        const r5_bars = bars.slice(-STABLE_R5_WINDOW);
+        r5_cnt = r5_bars.filter(b =>
           b.open > 0 && Math.abs(b.close - b.open) / b.open < candleThresh
         ).length;
       }
@@ -1402,7 +1404,7 @@ app.get('/api/screener-stable', (req, res) => {
         r2_vol,   // 10min总量，>= 110 为通过
         r3_pct,   // 现价偏离均价%，< 0.5% 为通过
         r4_pct,   // 首尾中间价漂移%，< 0.3% 为通过
-        r5_cnt,   // 安静分钟数，>= 7 为通过
+        r5_cnt,   // 最近7根K线中安静分钟数，>= 6 为通过
         bars_count: bars ? bars.length : 0,
       });
     }
