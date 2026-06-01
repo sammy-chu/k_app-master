@@ -562,7 +562,7 @@
     const maxVol = document.getElementById('orderVolMax').value || 0;
     try {
       const qs  = `min_vol=${minVol}&max_vol=${maxVol}`;
-      const res = await fetch(`/api/screener-large-orders?${qs}`);
+      const res = await fetch(`/api/screener-large-orders-v2?${qs}`);
       if (!res.ok) throw new Error(res.status);
       orderMap = await res.json();
     } catch(e) {
