@@ -172,6 +172,28 @@ async function ensureTables() {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS stable_screener_snapshot (
+        symbol      TEXT     NOT NULL,
+        trade_date  DATE     NOT NULL,
+        snap_time   TIME     NOT NULL,
+        last_price  NUMERIC(12,4),
+        open_price  NUMERIC(12,4),
+        change_pct  NUMERIC(8,4),
+        bars_count  SMALLINT,
+        r1_val      NUMERIC(8,4),
+        r2_vol      NUMERIC(14,2),
+        r3_pct      NUMERIC(8,4),
+        r4_pct      NUMERIC(8,4),
+        r5_cnt      SMALLINT,
+        r6_a        SMALLINT,
+        r6_b        SMALLINT,
+        pass_all    BOOLEAN  NOT NULL DEFAULT FALSE,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (symbol, trade_date, snap_time)
+      );
+    `);
+
     console.log('Tables ensured');
   } catch (err) {
     console.error('Error ensuring tables:', err);
@@ -351,7 +373,7 @@ function _isLargeOrder(vol, levels) {
 async function _fetchOrderBook(intervalMins) {
   const client = await pricePool.connect();
   try {
-    await client.query('SET statement_timeout = 8000');
+    await client.query('SET statement_timeout = 15000');
     const { rows } = await client.query(`
       SELECT s.symbol, ob.bid_depth, ob.ask_depth, ob.received_at
       FROM (
@@ -444,7 +466,7 @@ async function updatePriceWindow() {
   }
 }
 
-// [Window10m] 10分钟每分钟 OHLCV 聚合缓存（方案A: GROUP BY）
+// [Window7m] 7分钟每分钟 OHLCV 聚合缓存（方案A: GROUP BY）
 // 走 idx_tos_trades_received_at 索引，实测 ~71ms / 31628 行 / 2839 bars
 // 仅用 pricePool，与其他 pricePool 任务完全隔离，不影响任何现有功能
 async function updateWindow10m() {
@@ -461,7 +483,7 @@ async function updateWindow10m() {
         (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close,
         COALESCE(SUM(size::numeric), 0)                                   AS volume
       FROM tos_trades
-      WHERE received_at >= NOW() - INTERVAL '10 minutes'
+      WHERE received_at >= NOW() - INTERVAL '7 minutes'
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
         AND price IS NOT NULL
         AND price::numeric > 0
@@ -489,7 +511,7 @@ async function updateWindow10m() {
   snapshotStableHistory();
 }
 
-const STABLE_R1 = 1.2, STABLE_R2 = 310, STABLE_R5_WINDOW = 10, STABLE_R5_MIN = 6;
+const STABLE_R1 = 1.2, STABLE_R2 = 310, STABLE_R5_WINDOW = 7, STABLE_R5_MIN = 6;
 
 // R3/R5 共用阈值：按开盘价分档（"低于X按X算"向上取边界）
 // 开盘价 < 125 → 0.05%；125~267 → 0.04%；267~480 → 0.03%；480~1000 → 0.025%；≥1000 → 0.015%
@@ -548,7 +570,7 @@ function snapshotStableHistory() {
     if (r4_pct === null || r4_pct >= getR4Thresh(openPrice) * 100) continue;
     if (r5_cnt <  STABLE_R5_MIN) continue;
 
-    // R6: 10分钟内触下轨/上轨的K线数，a >= 3 或 b >= 3 才通过
+    // R6: 7分钟内触下轨/上轨的K线数，a >= 3 或 b >= 3 才通过
     const r6Range = winHigh - winLow;
     let r6_a = 0, r6_b = 0;
     if (r6Range > 0) {
@@ -569,6 +591,127 @@ function snapshotStableHistory() {
     } else {
       hist.push(entry);
     }
+  }
+}
+
+
+// === 稳定选股快照写入 ===
+// 每60s从内存 window10m + rankingCache 批量 upsert 当前分钟所有活跃股票的规则指标值
+async function writeStableSnapshot() {
+  const now = new Date();
+  const bj  = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+  const h = bj.getHours(), m = bj.getMinutes();
+  if (h < 8 || (h === 15 && m > 0) || h > 15) return;
+
+  const tradeDate = `${bj.getFullYear()}-${String(bj.getMonth()+1).padStart(2,'0')}-${String(bj.getDate()).padStart(2,'0')}`;
+  const snapTime  = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`;
+
+  const rows = [];
+  for (const row of rankingCache) {
+    const bars      = window10m.get(row.symbol);
+    if (!bars || bars.length === 0) continue;
+    const price     = Number(row.last_price);
+    const openPrice = Number(row.open_price) || price;
+    if (!price) continue;
+
+    const winHigh   = Math.max(...bars.map(b => b.high));
+    const winLow    = Math.min(...bars.map(b => b.low));
+    const r1_val    = Number(((winHigh - winLow) / price * 100).toFixed(4));
+    const r2_vol    = bars.reduce((s, b) => s + b.volume, 0);
+    const avgClose  = bars.reduce((s, b) => s + b.close, 0) / bars.length;
+    const r3_pct    = avgClose > 0 ? Number((Math.abs(price - avgClose) / avgClose * 100).toFixed(4)) : null;
+    const firstMid  = (bars[0].high + bars[0].low) / 2;
+    const lastMid   = (bars[bars.length - 1].high + bars[bars.length - 1].low) / 2;
+    const r4_pct    = lastMid > 0 ? Number((Math.abs(firstMid - lastMid) / lastMid * 100).toFixed(4)) : null;
+    const r35Thresh = getR35Thresh(openPrice);
+    const r5_bars   = bars.slice(-STABLE_R5_WINDOW);
+    const r5_cnt    = r5_bars.filter(b => b.open > 0 && Math.abs(b.close - b.open) / b.open < r35Thresh).length;
+
+    const r6Range = winHigh - winLow;
+    let r6_a = 0, r6_b = 0;
+    if (r6Range > 0) {
+      const priceA = winLow + r6Range * 0.15;
+      const priceB = winLow + r6Range * 0.85;
+      r6_a = bars.filter(b => b.low  < priceA).length;
+      r6_b = bars.filter(b => b.high > priceB).length;
+    }
+
+    const r4T    = getR4Thresh(openPrice);
+    const pass_all = (
+      r1_val < STABLE_R1 &&
+      r2_vol >= STABLE_R2 &&
+      r3_pct !== null && r3_pct < r35Thresh * 100 &&
+      r4_pct !== null && r4_pct < r4T * 100 &&
+      r5_cnt >= STABLE_R5_MIN &&
+      (r6_a >= 3 || r6_b >= 3)
+    );
+
+    rows.push([
+      row.symbol, tradeDate, snapTime,
+      price, openPrice, Number(row.change_pct),
+      bars.length,
+      r1_val, r2_vol, r3_pct, r4_pct, r5_cnt, r6_a, r6_b,
+      pass_all,
+    ]);
+  }
+
+  if (rows.length === 0) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('SET statement_timeout = 20000');
+    const BATCH = 500;
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const batch  = rows.slice(i, i + BATCH);
+      const values = [];
+      const params = [];
+      let   pi     = 1;
+      for (const r of batch) {
+        values.push(`($${pi},$${pi+1},$${pi+2},$${pi+3},$${pi+4},$${pi+5},$${pi+6},$${pi+7},$${pi+8},$${pi+9},$${pi+10},$${pi+11},$${pi+12},$${pi+13},$${pi+14})`);
+        params.push(...r);
+        pi += 15;
+      }
+      await client.query(`
+        INSERT INTO stable_screener_snapshot
+          (symbol, trade_date, snap_time,
+           last_price, open_price, change_pct, bars_count,
+           r1_val, r2_vol, r3_pct, r4_pct, r5_cnt, r6_a, r6_b, pass_all)
+        VALUES ${values.join(',')}
+        ON CONFLICT (symbol, trade_date, snap_time) DO UPDATE SET
+          last_price = EXCLUDED.last_price,
+          open_price = EXCLUDED.open_price,
+          change_pct = EXCLUDED.change_pct,
+          bars_count = EXCLUDED.bars_count,
+          r1_val     = EXCLUDED.r1_val,
+          r2_vol     = EXCLUDED.r2_vol,
+          r3_pct     = EXCLUDED.r3_pct,
+          r4_pct     = EXCLUDED.r4_pct,
+          r5_cnt     = EXCLUDED.r5_cnt,
+          r6_a       = EXCLUDED.r6_a,
+          r6_b       = EXCLUDED.r6_b,
+          pass_all   = EXCLUDED.pass_all,
+          created_at = NOW()
+      `, params);
+    }
+    console.log(`[StableSnapshot] Wrote ${rows.length} rows @ ${snapTime}`);
+  } catch (err) {
+    console.error('[StableSnapshot] Write failed:', err.message);
+  } finally {
+    await client.query('SET statement_timeout = 0').catch(() => {});
+    client.release();
+  }
+}
+
+// 清理7天前的快照数据（每天07:55重置时执行）
+async function pruneStableSnapshot() {
+  try {
+    const { rowCount } = await pool.query(`
+      DELETE FROM stable_screener_snapshot
+      WHERE trade_date < current_date - INTERVAL '7 days'
+    `);
+    if (rowCount > 0) console.log(`[StableSnapshot] Pruned ${rowCount} old rows`);
+  } catch (err) {
+    console.error('[StableSnapshot] Prune failed:', err.message);
   }
 }
 
@@ -1476,6 +1619,100 @@ app.get('/api/screener-stable/history', (req, res) => {
   if (!symbol) return res.status(400).json({ error: 'symbol required' });
   res.json({ symbol, records: stableHistory.get(symbol) || [] });
 });
+
+// 单时间点诊断：查快照表，返回该分钟的完整规则诊断
+// GET /api/screener-stable/diagnose?symbol=AAPL&time=10:23
+app.get('/api/screener-stable/diagnose', async (req, res) => {
+  const symbol  = (req.query.symbol || '').trim().toUpperCase();
+  const timeQ   = (req.query.time   || '').trim();
+  if (!symbol) return res.status(400).json({ error: 'symbol required' });
+  if (!timeQ)  return res.status(400).json({ error: 'time required, format HH:MM' });
+  const snapTime = timeQ.length === 5 ? timeQ + ':00' : timeQ.slice(0, 8);
+  try {
+    const { rows } = await pool.query(`
+      SELECT * FROM stable_screener_snapshot
+      WHERE symbol = $1 AND trade_date = current_date AND snap_time = $2::time
+    `, [symbol, snapTime]);
+    if (rows.length === 0) return res.json({ symbol, snap_time: snapTime, found: false });
+    res.json({ symbol, snap_time: snapTime, found: true, ...buildDiagnoseResult(rows[0]) });
+  } catch (e) {
+    console.error('[diagnose] error:', e.message);
+    res.status(500).json({ error: 'diagnose_failed' });
+  }
+});
+
+// 时间段诊断：返回 [from, to] 内每分钟的快照列表
+// GET /api/screener-stable/diagnose-range?symbol=AAPL&from=10:00&to=10:30
+app.get('/api/screener-stable/diagnose-range', async (req, res) => {
+  const symbol = (req.query.symbol || '').trim().toUpperCase();
+  const fromQ  = (req.query.from   || '').trim();
+  const toQ    = (req.query.to     || '').trim();
+  if (!symbol) return res.status(400).json({ error: 'symbol required' });
+  if (!fromQ || !toQ) return res.status(400).json({ error: 'from and to required, format HH:MM' });
+  const fromTime = fromQ.length === 5 ? fromQ + ':00' : fromQ.slice(0, 8);
+  const toTime   = toQ.length   === 5 ? toQ   + ':00' : toQ.slice(0, 8);
+  try {
+    const { rows } = await pool.query(`
+      SELECT * FROM stable_screener_snapshot
+      WHERE symbol     = $1
+        AND trade_date = current_date
+        AND snap_time >= $2::time
+        AND snap_time <= $3::time
+      ORDER BY snap_time ASC
+    `, [symbol, fromTime, toTime]);
+    const records = rows.map(r => ({ snap_time: r.snap_time, ...buildDiagnoseResult(r) }));
+    res.json({ symbol, from: fromTime, to: toTime, count: records.length, records });
+  } catch (e) {
+    console.error('[diagnose-range] error:', e.message);
+    res.status(500).json({ error: 'diagnose_range_failed' });
+  }
+});
+
+// 共用：把快照行转成规则诊断结构
+function buildDiagnoseResult(s) {
+  const openPrice = Number(s.open_price);
+  const r35Thresh = getR35Thresh(openPrice);
+  const r4Thresh  = getR4Thresh(openPrice);
+  const rules = [
+    { id:'R1', label:'振幅',      cmp:'lt',       unit:'%',  threshold: STABLE_R1,
+      value: s.r1_val !== null ? Number(s.r1_val) : null,
+      pass:  s.r1_val !== null ? Number(s.r1_val) < STABLE_R1 : null },
+    { id:'R2', label:'成交量',    cmp:'gte',      unit:'股', threshold: STABLE_R2,
+      value: s.r2_vol !== null ? Number(s.r2_vol) : null,
+      pass:  s.r2_vol !== null ? Number(s.r2_vol) >= STABLE_R2 : null },
+    { id:'R3', label:'价格偏离',  cmp:'lt',       unit:'%',  threshold: Number((r35Thresh*100).toFixed(4)),
+      value: s.r3_pct !== null ? Number(s.r3_pct) : null,
+      pass:  s.r3_pct !== null ? Number(s.r3_pct) < r35Thresh*100 : null },
+    { id:'R4', label:'中间价漂移',cmp:'lt',       unit:'%',  threshold: Number((r4Thresh*100).toFixed(4)),
+      value: s.r4_pct !== null ? Number(s.r4_pct) : null,
+      pass:  s.r4_pct !== null ? Number(s.r4_pct) < r4Thresh*100 : null },
+    { id:'R5', label:'安静分钟',  cmp:'gte',      unit:'分钟',threshold: STABLE_R5_MIN,
+      value: s.r5_cnt !== null ? Number(s.r5_cnt) : null,
+      pass:  s.r5_cnt !== null ? Number(s.r5_cnt) >= STABLE_R5_MIN : null },
+    { id:'R6', label:'触轨',      cmp:'gte_either',unit:'根', threshold: 3,
+      value: (s.r6_a !== null && s.r6_b !== null) ? { a: Number(s.r6_a), b: Number(s.r6_b) } : null,
+      pass:  (s.r6_a !== null && s.r6_b !== null) ? (Number(s.r6_a) >= 3 || Number(s.r6_b) >= 3) : null },
+  ];
+  for (const r of rules) {
+    if (r.pass === null || r.value === null || r.pass) { r.delta = null; continue; }
+    if (r.id === 'R6') {
+      r.delta = `差 ${r.threshold - Math.max(r.value.a, r.value.b)} 根`;
+    } else if (r.cmp === 'lt') {
+      r.delta = `超出 ${(r.value - r.threshold).toFixed(4)}${r.unit}`;
+    } else {
+      r.delta = `差 ${(r.threshold - r.value).toFixed(r.id === 'R5' ? 0 : 4)}${r.unit}`;
+    }
+  }
+  return {
+    pass_all:   Boolean(s.pass_all),
+    last_price: Number(s.last_price),
+    open_price: openPrice,
+    change_pct: Number(s.change_pct),
+    bars_count: Number(s.bars_count),
+    rules,
+  };
+}
+
 app.get('/api/volume-surge-today', (req, res) => {
   res.json([...volumeSurgeToday]);
 });
@@ -1974,8 +2211,9 @@ async function updateDailySummary() {
   try {
     // ── Step 1：增量 upsert（close/high/low/volume）──────────────────────────
     // 首次运行扫当日08:00至今（全天冷启动），之后每轮只扫约60s增量。
-    // 给 Step 1 单独设 timeout：首次全天量允许更长，正常增量极快。
+    // work_mem=64MB：Sort 约需 30MB，内存中完成避免溢盘（session级，释放后还原）
     await client.query('SET statement_timeout = 25000');
+    await client.query("SET work_mem = '64MB'");
     await client.query(`
       INSERT INTO market_data.daily_summary
         (symbol, trade_date, open_price, close_price, high_price, low_price, total_volume)
@@ -2011,6 +2249,7 @@ async function updateDailySummary() {
     // openPriceDone = true 后整个 Step 2 跳过，日常几乎零开销。
     if (!openPriceDone) {
       await client.query('SET statement_timeout = 20000');
+      await client.query("SET work_mem = '64MB'");
       const fixResult = await client.query(`
         UPDATE market_data.daily_summary ds
         SET open_price = sub.open_price
@@ -2150,10 +2389,10 @@ async function scanAllVolumeAlerts() {
         FROM today_vol t
         JOIN hist h USING (symbol)
         WHERE h.avg_vol > 0
-          AND (t.cum_vol / NULLIF(h.avg_vol, 0)) >= $4::numeric
+          AND (t.cum_vol / NULLIF(h.avg_vol, 0)) >= $3::numeric
       `;
 
-      const candidates = await pool.query(selectSql, [today, VOLUME_HISTORY_DAYS, ruleId, cp.expected_pct]);
+      const candidates = await pool.query(selectSql, [today, VOLUME_HISTORY_DAYS, cp.expected_pct]);
 
       if (candidates.rowCount === 0) continue;
 
@@ -2163,7 +2402,7 @@ async function scanAllVolumeAlerts() {
       for (let i = 0; i < candidates.rows.length; i += BATCH_SIZE) {
         const batch = candidates.rows.slice(i, i + BATCH_SIZE);
         const values = batch.map((_, j) => {
-          const base = j * 4;
+          const base = j * 5;
           return `($${base+1}, $${base+2}::date::timestamp, $${base+3}, $${base+4}, $${base+5}, '${ruleId}', now())`;
         }).join(',');
         const params = batch.flatMap(r => [r.symbol, today, r.volume_ratio, r.cum_vol, r.avg_vol]);
@@ -2380,6 +2619,12 @@ function startAlertMonitor() {
     runScan('IntradayVolWriter', writeIntradayVolMinute, 60000);
   }, 45000);
 
+  // ── t=55s：StableSnapshot（主池，60s，在 Window10m 刷新后写入）────────────
+  setTimeout(() => {
+    console.log(`[StableSnapshot] starting, interval=60s`);
+    runScan('StableSnapshot', writeStableSnapshot, 60000);
+  }, 55000);
+
   // ── t=0s：VolumeMonitor（主池，300s，立即启动）───────────────────────────
   console.log(`[VolumeMonitor] starting, interval=${VOLUME_SCAN_INTERVAL / 1000}s, ratio>=${VOLUME_RATIO_THRESHOLD}x OR z>=${VOLUME_Z_THRESHOLD}, default_history=${VOLUME_HISTORY_DAYS}d`);
   runScan('VolumeMonitor', scanAllVolumeAlerts, VOLUME_SCAN_INTERVAL);
@@ -2417,6 +2662,7 @@ function startAlertMonitor() {
       lastDailySummaryRunAt = null;
       openPriceDone = false;
       console.log('[StableHistory] cleared for new trading day');
+      pruneStableSnapshot();
       console.log('[DailySummary] open_price flag reset for new trading day');
     }
   }, 60000);

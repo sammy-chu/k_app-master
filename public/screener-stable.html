@@ -299,11 +299,20 @@
     <div class="lookup-row">
       <label>查询单只股票规则详情</label>
       <input type="text" id="symbolInput" placeholder="输入代码" maxlength="20"
-             oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter')lookupSymbol()">
-      <button class="btn" onclick="lookupSymbol()">查询</button>
+             oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter')handleLookup()">
+      <input type="text" id="timeFrom" placeholder="开始 HH:MM" maxlength="5"
+             style="width:108px;"
+             oninput="this.value=this.value.replace(/[^0-9:]/g,'')"
+             onkeydown="if(event.key==='Enter')handleLookup()">
+      <span style="font-size:12px;color:#555;">—</span>
+      <input type="text" id="timeTo" placeholder="结束 HH:MM" maxlength="5"
+             style="width:108px;"
+             oninput="this.value=this.value.replace(/[^0-9:]/g,'')"
+             onkeydown="if(event.key==='Enter')handleLookup()">
+      <button class="btn" onclick="handleLookup()">查询</button>
       <button class="btn" onclick="lookupHistory()" title="查询今日满足全部条件的历史时间点">📅 今日时间点</button>
       <button class="btn" onclick="clearLookup()" style="color:#555;border-color:#333;">清除</button>
-      <span style="font-size:12px;color:#555;margin-left:4px;">也可点击表格中的代码</span>
+      <span style="font-size:12px;color:#555;margin-left:4px;">时间留空查实时，填时间查历史快照</span>
     </div>
     <div class="lookup-result" id="lookupResult"></div>
     <div class="history-panel" id="historyPanel"></div>
@@ -358,66 +367,46 @@ let countdown  = 10;
 let lastParams = {};
 let isFetching = false;
 
-// ── 退出监控与置顶状态 ────────────────────────────────────────────────────
-// 新规则：退出后立刻从列表消失；退出后5分钟内若任意相邻分钟波动≥0.5%，置顶2分钟后消失。
+// ── 宽限期状态 ────────────────────────────────────────────────────────────
+// symbol -> { exitAt: Date, exitPrice: number, pinned: boolean, pinnedAt: Date }
 const graceMap = new Map();
 let prevPassSymbols = new Set();  // 上一次满足条件的 symbol 集合
-const MONITOR_MS     = 5 * 60 * 1000;  // 退出后监控5分钟
-const PINNED_MS      = 2 * 60 * 1000;  // 置顶显示2分钟
-const MOVE_THRESH    = 0.005;           // 分钟级波动阈值 0.5%
-const MIN_INTERVAL_MS = 50 * 1000;     // 相邻采样至少50秒才算相邻分钟
+const GRACE_MS   = 2 * 60 * 1000;   // 2分钟宽限期
+const GRACE_VOL  = 0.005;            // 0.5% 波动触发置顶
 
 function updateGrace(passSymbols, allRows) {
   const now = Date.now();
 
-  // 1. 更新已在监控/置顶中的股票
+  // 1. 只有之前在通过列表里的股票退出时才加入宽限期
   for (const [sym, g] of graceMap) {
+    // 更新宽限期内股票的当前数据和波动检测
     const curRow = allRows.find(r => r.symbol === sym);
-    const price  = curRow ? Number(curRow.last_price) : 0;
-
-    if (price > 0) {
-      g.row = curRow;
-      // 追加价格采样（约10s一次）
-      g.priceHistory.push({ price, ts: now });
-      // 检测相邻分钟（间隔≥50s）波动是否≥0.5%
-      if (!g.pinned) {
-        const hist = g.priceHistory;
-        for (let i = hist.length - 1; i >= 1; i--) {
-          if (hist[i].ts - hist[i - 1].ts >= MIN_INTERVAL_MS) {
-            const move = Math.abs(hist[i].price - hist[i - 1].price) / hist[i - 1].price;
-            if (move >= MOVE_THRESH) {
-              g.pinned   = true;
-              g.pinnedAt = now;
-            }
-            break; // 只看最近一对相邻分钟采样
-          }
-        }
+    if (curRow && g.exitPrice > 0) {
+      const chg = Math.abs(Number(curRow.last_price) - g.exitPrice) / g.exitPrice;
+      if (chg >= GRACE_VOL && !g.pinned) {
+        g.pinned   = true;
+        g.pinnedAt = now;
       }
+      g.row = curRow;
     }
-
-    // 清理：未置顶且监控期已过，或置顶期已过
-    const monitorExpired = now - g.exitAt > MONITOR_MS;
-    const pinnedExpired  = g.pinned && (now - g.pinnedAt > PINNED_MS);
-    if ((!g.pinned && monitorExpired) || pinnedExpired) {
-      graceMap.delete(sym);
-    }
+    // 清理过期
+    if (now - g.exitAt > GRACE_MS) graceMap.delete(sym);
   }
 
-  // 2. 之前通过的股票刚退出 → 加入监控
+  // 2. 检查之前通过的股票是否刚退出（只处理 prevPassSymbols 里有、现在没有的）
   for (const sym of prevPassSymbols) {
     if (!passSymbols.has(sym) && !graceMap.has(sym)) {
-      const row   = allRows.find(r => r.symbol === sym);
-      if (!row) continue;
-      const price = Number(row.last_price) || 0;
+      const row = allRows.find(r => r.symbol === sym);
+      if (!row) continue;  // 该股票已不在今日数据中，跳过
       graceMap.set(sym, {
-        exitAt:       now,
-        priceHistory: price > 0 ? [{ price, ts: now }] : [],
-        pinned:       false,
-        pinnedAt:     null,
+        exitAt:    now,
+        exitPrice: Number(row.last_price) || 0,
+        pinned:    false,
+        pinnedAt:  null,
         row,
       });
     }
-    // 重新满足条件 → 退出监控
+    // 重新满足条件，清除宽限期
     if (passSymbols.has(sym) && graceMap.has(sym)) {
       graceMap.delete(sym);
     }
@@ -428,15 +417,15 @@ function updateGrace(passSymbols, allRows) {
 }
 
 function getGraceRows() {
-  // 只返回已触发置顶且置顶期未过的行（未触发置顶的静默监控，不显示在列表中）
   const now = Date.now();
   return [...graceMap.entries()]
-    .filter(([, g]) => g.pinned && g.row && now - g.pinnedAt <= PINNED_MS)
-    .map(([, g]) => ({
+    .filter(([, g]) => now - g.exitAt <= GRACE_MS && g.row)
+    .map(([sym, g]) => ({
       ...g.row,
       _grace:    true,
-      _pinned:   true,
-      _remainMs: PINNED_MS - (now - g.pinnedAt),
+      _pinned:   g.pinned,
+      _exitAt:   g.exitAt,
+      _remainMs: GRACE_MS - (now - g.exitAt),
     }));
 }
 
@@ -530,8 +519,11 @@ async function fetchData(params) {
     if (dot) dot.className = 'status-dot live';
     if (stxt) stxt.innerHTML = `<span class="status-dot live"></span>实时 · ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;
     applyFilter();
-    const sym = document.getElementById('symbolInput').value.trim().toUpperCase();
-    if (sym) renderLookup(sym);
+    const sym  = document.getElementById('symbolInput').value.trim().toUpperCase();
+    const from = document.getElementById('timeFrom').value.trim();
+    const to   = document.getElementById('timeTo').value.trim();
+    // 有时间输入时处于历史诊断模式，自动刷新不覆盖诊断结果
+    if (sym && !from && !to) renderLookup(sym);
   } catch(e) {
     if (dot) dot.className = 'status-dot error';
     if (stxt) stxt.innerHTML = `<span class="status-dot error"></span>连接失败`;
@@ -599,16 +591,19 @@ function applyFilter() {
     return va < vb ? sortDir : va > vb ? -sortDir : 0;
   });
 
-  // 置顶行：按置顶触发时间降序排在最前
+  // 宽限期行：置顶的排最前，其余按退出时间降序
   const graceRows = getGraceRows();
-  const pinnedRows = [...graceRows].sort((a, b) => b._remainMs - a._remainMs);
+  const pinnedRows = graceRows.filter(r => r._pinned)
+    .sort((a, b) => b._exitAt - a._exitAt);
+  const gracePlainRows = graceRows.filter(r => !r._pinned)
+    .sort((a, b) => b._exitAt - a._exitAt);
 
-  sortedData = [...pinnedRows, ...sorted];
+  sortedData = [...pinnedRows, ...gracePlainRows, ...sorted];
 
   const total = allData.filter(r => evalRow(r).passAll).length;
   document.getElementById('count-info').textContent =
     `全部通过 ${total} 只 · 当前筛选 ${sorted.length} 只` +
-    (graceRows.length ? ` · 置顶中 ${graceRows.length} 只` : '');
+    (graceRows.length ? ` · 宽限期 ${graceRows.length} 只` : '');
 
   renderTable();
 }
@@ -654,13 +649,14 @@ function buildRowHTML(r) {
   const vPct = Math.min(100, maxVol > 0 ? vol / maxVol * 100 : 0);
   const vr   = r.vol_ratio || 0;
 
-  // 置顶徽标
+  // 宽限期徽标
   let graceBadge = '';
-  if (r._pinned) {
+  if (r._grace || r._pinned) {
     const remainSec = Math.max(0, Math.ceil((r._remainMs || 0) / 1000));
     const mm = String(Math.floor(remainSec / 60)).padStart(2, '0');
     const ss = String(remainSec % 60).padStart(2, '0');
-    graceBadge = `<span class="grace-badge">📌 置顶 ${mm}:${ss}</span>`;
+    const label = r._pinned ? `📌 置顶 ${mm}:${ss}` : `⏱ ${mm}:${ss}`;
+    graceBadge = `<span class="grace-badge">${label}</span>`;
   }
 
   // 规则列：全部通过才显示，所以值只会是绿色
@@ -684,6 +680,8 @@ function buildRowHTML(r) {
 // ── 代码查询 ──────────────────────────────────────────────────────────────
 function lookupAndShow(sym) {
   document.getElementById('symbolInput').value = sym;
+  document.getElementById('timeFrom').value    = '';   // 点击表格代码 → 回实时模式
+  document.getElementById('timeTo').value      = '';
   const hp = document.getElementById('historyPanel');
   hp.className = 'history-panel';
   hp.innerHTML = '';
@@ -699,10 +697,177 @@ function lookupSymbol() {
 
 function clearLookup() {
   document.getElementById('symbolInput').value = '';
+  document.getElementById('timeFrom').value    = '';
+  document.getElementById('timeTo').value      = '';
   document.getElementById('lookupResult').className = 'lookup-result';
   document.getElementById('lookupResult').innerHTML = '';
   document.getElementById('historyPanel').className = 'history-panel';
   document.getElementById('historyPanel').innerHTML = '';
+}
+
+// 统一入口：有时间 → 历史快照诊断，无时间 → 实时查询
+function handleLookup() {
+  const from = document.getElementById('timeFrom').value.trim();
+  const to   = document.getElementById('timeTo').value.trim();
+  if (from || to) {
+    diagnoseSymbol();
+  } else {
+    lookupSymbol();
+  }
+}
+
+async function diagnoseSymbol() {
+  const sym  = document.getElementById('symbolInput').value.trim().toUpperCase();
+  const from = document.getElementById('timeFrom').value.trim();
+  const to   = document.getElementById('timeTo').value.trim();
+  if (!sym) { alert('请输入股票代码'); return; }
+
+  const timeRe = /^\d{2}:\d{2}$/;
+  if (from && !timeRe.test(from)) { alert('开始时间格式错误，请输入 HH:MM'); return; }
+  if (to   && !timeRe.test(to))   { alert('结束时间格式错误，请输入 HH:MM'); return; }
+
+  const el = document.getElementById('lookupResult');
+  el.className = 'lookup-result show';
+  document.getElementById('historyPanel').className = 'history-panel';
+  document.getElementById('historyPanel').innerHTML = '';
+
+  // 只填了一个时间 → 单点查询；两个都填 → 范围查询
+  const isSingle = (from && !to) || (!from && to);
+  const singleTime = from || to;
+
+  if (isSingle) {
+    el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} @ ${singleTime} 快照中…</div>`;
+    try {
+      const res  = await fetch(`/api/screener-stable/diagnose?symbol=${encodeURIComponent(sym)}&time=${encodeURIComponent(singleTime)}`);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      renderDiagnose(sym, singleTime, data);
+    } catch(e) {
+      el.innerHTML = `<div style="color:#ef5350;font-size:13px;">查询失败：${e.message}</div>`;
+    }
+  } else {
+    el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} ${from}–${to} 快照中…</div>`;
+    try {
+      const res  = await fetch(`/api/screener-stable/diagnose-range?symbol=${encodeURIComponent(sym)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      renderDiagnoseRange(sym, data);
+    } catch(e) {
+      el.innerHTML = `<div style="color:#ef5350;font-size:13px;">查询失败：${e.message}</div>`;
+    }
+  }
+}
+
+function renderDiagnose(sym, time, data) {
+  const el = document.getElementById('lookupResult');
+  if (!data.found) {
+    el.innerHTML = `<div style="color:#888;font-size:13px;">
+      <b style="color:#fff">${sym}</b> 在 <b style="color:#fff">${time}</b>
+      暂无快照数据（该时间点无交易记录，或快照尚未写入）
+    </div>`;
+    return;
+  }
+  const pct  = Number(data.change_pct);
+  const pcls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+  const sign = pct > 0 ? '+' : '';
+  const statusLabel = data.pass_all
+    ? `<span class="pass-all">✓ 全部通过</span>`
+    : `<span class="fail-some">✗ 未全部通过</span>`;
+  el.innerHTML = `
+    <div class="lookup-sym" style="margin-bottom:6px;">
+      ${sym}
+      <span class="${pcls}">${fmt(data.last_price,2)}  ${sign}${pct.toFixed(2)}%</span>
+      ${statusLabel}
+      <span style="color:#555;font-size:11px;margin-left:10px;">@ ${time} · ${data.bars_count} 根K线</span>
+    </div>
+    <div class="rule-detail-grid">${buildRuleCards(data.rules)}</div>`;
+}
+
+function renderDiagnoseRange(sym, data) {
+  const el = document.getElementById('lookupResult');
+  if (data.count === 0) {
+    el.innerHTML = `<div style="color:#888;font-size:13px;">
+      <b style="color:#fff">${sym}</b> 在 ${data.from.slice(0,5)}–${data.to.slice(0,5)} 内暂无快照数据
+    </div>`;
+    return;
+  }
+
+  const passCount = data.records.filter(r => r.pass_all).length;
+
+  const rows = data.records.map(rec => {
+    const passAll = rec.pass_all;
+    const timeStr = rec.snap_time.slice(0, 5);
+
+    // 6条规则内联单元格
+    const ruleCells = rec.rules.map(r => {
+      let valStr;
+      if (r.value === null)   valStr = '—';
+      else if (r.id === 'R6') valStr = `a${r.value.a}/b${r.value.b}`;
+      else if (r.id === 'R5') valStr = `${Number(r.value).toFixed(0)}`;
+      else                    valStr = `${Number(r.value).toFixed(3)}`;
+
+      const color = r.pass === null ? '#555'
+                  : r.pass          ? '#26a69a'
+                  :                   '#ef5350';
+      const title = r.delta ? `${r.id}: ${r.delta}` : r.id;
+      return `<td title="${title}" style="padding:6px 8px;text-align:right;color:${color};font-size:12px;white-space:nowrap;">${valStr}</td>`;
+    }).join('');
+
+    const statusColor = passAll ? '#26a69a' : '#ef5350';
+    const statusText  = passAll ? '✓' : `✗`;
+    const failIds     = passAll ? '' : rec.rules.filter(r => r.pass === false).map(r => r.id).join(' ');
+
+    return `<tr style="border-bottom:1px solid #2e2e2e;">
+      <td style="padding:6px 10px;color:#aaa;font-size:12px;white-space:nowrap;">${timeStr}</td>
+      <td style="padding:6px 8px;text-align:center;">
+        <span style="color:${statusColor};font-size:12px;font-weight:bold;">${statusText}</span>
+        ${failIds ? `<span style="color:#555;font-size:10px;margin-left:4px;">${failIds}</span>` : ''}
+      </td>
+      ${ruleCells}
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="margin-bottom:8px;font-size:12px;color:#888;">
+      <b style="color:#fff;font-size:14px;">${sym}</b>
+      <span style="margin-left:10px;">${data.from.slice(0,5)} — ${data.to.slice(0,5)}</span>
+      <span style="margin-left:10px;">${data.count} 个时间点</span>
+      <span style="margin-left:10px;color:#26a69a;">${passCount} 个全部通过</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse;background:#252525;border-radius:6px;overflow:hidden;font-size:13px;">
+      <thead><tr style="background:#333;">
+        <th style="padding:6px 10px;text-align:left;color:#aaa;font-weight:600;font-size:11px;">时间</th>
+        <th style="padding:6px 8px;text-align:center;color:#aaa;font-weight:600;font-size:11px;">结果</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;" title="振幅% &lt;1.2%">R1 振幅%</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;" title="成交量 ≥310">R2 量</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;" title="价格偏离%">R3 价偏%</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;" title="中间价漂移%">R4 漂%</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;" title="安静分钟数 ≥6">R5 安静</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;" title="触轨 a≥3或b≥3">R6 触轨</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function buildRuleCards(rules) {
+  return rules.map(r => {
+    const cls  = r.pass === null ? 'na' : r.pass ? 'pass' : 'fail';
+    const icon = r.pass === null ? '' : r.pass ? '✓ ' : '✗ ';
+    let valueStr;
+    if (r.value === null)   valueStr = '—';
+    else if (r.id === 'R6') valueStr = `a=${r.value.a} / b=${r.value.b}`;
+    else                    valueStr = `${Number(r.value).toFixed(r.id==='R5'?0:3)}${r.unit}`;
+    const threshStr = r.id === 'R6' ? `a≥${r.threshold} 或 b≥${r.threshold}`
+      : r.cmp === 'lt' ? `< ${r.threshold}${r.unit}` : `≥ ${r.threshold}${r.unit}`;
+    const deltaHTML = r.delta
+      ? `<div class="rule-card-threshold" style="color:#ef535088;margin-top:3px;">↑ ${r.delta}</div>` : '';
+    return `<div class="rule-card ${cls}">
+      <div class="rule-card-title">${r.id} ${r.label}</div>
+      <div class="rule-card-value">${icon}${valueStr}</div>
+      <div class="rule-card-threshold">阈值 ${threshStr}</div>
+      ${deltaHTML}
+    </div>`;
+  }).join('');
 }
 
 async function lookupHistory() {
@@ -876,13 +1041,12 @@ setInterval(() => {
   }
   document.getElementById('refresh-timer').textContent = `${countdown}s 后刷新`;
 
-  // 置顶倒计时每秒刷新（如果有置顶中的股票）
-  const hasPinned = [...graceMap.values()].some(g => g.pinned);
-  if (hasPinned) {
-    // 清理置顶期已过的条目
+  // 宽限期倒计时每秒刷新（如果有宽限期股票）
+  if (graceMap.size > 0) {
+    // 清理过期
     const now = Date.now();
     for (const [sym, g] of graceMap) {
-      if (g.pinned && now - g.pinnedAt > PINNED_MS) graceMap.delete(sym);
+      if (now - g.exitAt > GRACE_MS) graceMap.delete(sym);
     }
     renderTable();
   }
