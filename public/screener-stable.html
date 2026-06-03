@@ -42,10 +42,32 @@
   .status-dot.error { background: #ef5350; }
 
   /* ── 筛选面板 ── */
+  .filter-panel-wrap { margin-bottom: 14px; }
+  .filter-toggle-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 14px; background: #2a2a2a; border-radius: 6px;
+    cursor: pointer; user-select: none;
+    border: 1px solid #333; transition: border-color 0.15s;
+  }
+  .filter-toggle-bar:hover { border-color: #444; }
+  .filter-toggle-left { display: flex; align-items: center; gap: 10px; }
+  .filter-toggle-label { font-size: 12px; color: #666; }
+  .filter-active-pills { display: flex; gap: 5px; flex-wrap: wrap; }
+  .filter-pill {
+    font-size: 11px; padding: 1px 8px; border-radius: 10px;
+    background: #007acc1a; border: 1px solid #007acc44; color: #7ac0f0;
+  }
+  .filter-chevron { font-size: 10px; color: #555; transition: transform 0.2s ease; }
+  .filter-chevron.open { transform: rotate(180deg); }
+  .filter-body {
+    overflow: hidden; max-height: 0; opacity: 0;
+    transition: max-height 0.25s ease, opacity 0.2s ease;
+  }
+  .filter-body.open { max-height: 160px; opacity: 1; }
   .filter-panel {
-    background: #2a2a2a; padding: 14px 16px; border-radius: 6px;
-    margin-bottom: 14px; display: flex; flex-wrap: wrap; gap: 12px 20px;
-    align-items: flex-end;
+    background: #2a2a2a; padding: 12px 16px 14px;
+    border-radius: 0 0 6px 6px; border-top: 1px solid #333;
+    display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: flex-end;
   }
   .filter-group { display: flex; flex-direction: column; gap: 4px; }
   .filter-group label { font-size: 12px; color: #888; }
@@ -251,46 +273,57 @@
   </div>
 
   <!-- 基础筛选面板 -->
-  <div class="filter-panel">
-    <div class="filter-group">
-      <label>价格区间</label>
-      <div class="filter-row">
-        <input type="number" id="priceMin" placeholder="最低" step="1" min="0">
-        <span class="filter-sep">—</span>
-        <input type="number" id="priceMax" placeholder="最高" step="1" min="0">
+  <div class="filter-panel-wrap">
+    <div class="filter-toggle-bar" onclick="toggleFilter()">
+      <div class="filter-toggle-left">
+        <span class="filter-toggle-label">筛选条件</span>
+        <div class="filter-active-pills" id="filterPills"></div>
       </div>
+      <span class="filter-chevron" id="filterChevron">▼</span>
     </div>
+    <div class="filter-body" id="filterBody">
+      <div class="filter-panel">
+        <div class="filter-group">
+          <label>价格区间</label>
+          <div class="filter-row">
+            <input type="number" id="priceMin" placeholder="最低" step="1" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="priceMax" placeholder="最高" step="1" min="0">
+          </div>
+        </div>
 
-    <div class="filter-group">
-      <label>涨跌幅绝对值 %</label>
-      <div class="filter-row">
-        <input type="number" id="changeMin" placeholder="最低" step="0.1" min="0">
-        <span class="filter-sep">—</span>
-        <input type="number" id="changeMax" placeholder="最高" step="0.1" min="0">
+        <div class="filter-group">
+          <label>涨跌幅绝对值 %</label>
+          <div class="filter-row">
+            <input type="number" id="changeMin" placeholder="最低" step="0.1" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="changeMax" placeholder="最高" step="0.1" min="0">
+          </div>
+        </div>
+
+        <div class="filter-group">
+          <label>成交量区间</label>
+          <div class="filter-row">
+            <input type="number" id="volMin" placeholder="最低" step="1000" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="volMax" placeholder="最高" step="1000" min="0">
+          </div>
+        </div>
+
+        <div class="filter-group">
+          <label>涨跌额绝对值</label>
+          <div class="filter-row">
+            <input type="number" id="changeAmtMin" placeholder="最低" step="0.01" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="changeAmtMax" placeholder="最高" step="0.01" min="0">
+          </div>
+        </div>
+
+        <div class="filter-actions">
+          <button class="btn" onclick="clearFilters()">清空</button>
+          <button class="btn primary" onclick="run()">筛选</button>
+        </div>
       </div>
-    </div>
-
-    <div class="filter-group">
-      <label>成交量区间</label>
-      <div class="filter-row">
-        <input type="number" id="volMin" placeholder="最低" step="1000" min="0">
-        <span class="filter-sep">—</span>
-        <input type="number" id="volMax" placeholder="最高" step="1000" min="0">
-      </div>
-    </div>
-
-    <div class="filter-group">
-      <label>涨跌额绝对值</label>
-      <div class="filter-row">
-        <input type="number" id="changeAmtMin" placeholder="最低" step="0.01" min="0">
-        <span class="filter-sep">—</span>
-        <input type="number" id="changeAmtMax" placeholder="最高" step="0.01" min="0">
-      </div>
-    </div>
-
-    <div class="filter-actions">
-      <button class="btn" onclick="clearFilters()">清空</button>
-      <button class="btn primary" onclick="run()">筛选</button>
     </div>
   </div>
 
@@ -368,48 +401,62 @@ let lastParams = {};
 let isFetching = false;
 
 // ── 宽限期状态 ────────────────────────────────────────────────────────────
-// symbol -> { exitAt: Date, exitPrice: number, pinned: boolean, pinnedAt: Date }
+// 退出后立即消失；5分钟内任意相邻分钟波动≥0.5%则置顶2分钟后消失
+// symbol -> { exitAt, priceHistory:[{price,ts}], pinned, pinnedAt, row }
 const graceMap = new Map();
-let prevPassSymbols = new Set();  // 上一次满足条件的 symbol 集合
-const GRACE_MS   = 2 * 60 * 1000;   // 2分钟宽限期
-const GRACE_VOL  = 0.005;            // 0.5% 波动触发置顶
+let prevPassSymbols = new Set();
+const MONITOR_MS      = 5 * 60 * 1000;   // 退出后监控5分钟
+const PINNED_MS       = 2 * 60 * 1000;   // 置顶显示2分钟
+const MOVE_THRESH     = 0.005;            // 分钟级波动阈值0.5%
+const MIN_INTERVAL_MS = 50 * 1000;       // 相邻采样至少50秒才算相邻分钟
 
 function updateGrace(passSymbols, allRows) {
   const now = Date.now();
 
-  // 1. 只有之前在通过列表里的股票退出时才加入宽限期
+  // 1. 更新已在监控/置顶中的股票
   for (const [sym, g] of graceMap) {
-    // 更新宽限期内股票的当前数据和波动检测
     const curRow = allRows.find(r => r.symbol === sym);
-    if (curRow && g.exitPrice > 0) {
-      const chg = Math.abs(Number(curRow.last_price) - g.exitPrice) / g.exitPrice;
-      if (chg >= GRACE_VOL && !g.pinned) {
-        g.pinned   = true;
-        g.pinnedAt = now;
-      }
+    const price  = curRow ? Number(curRow.last_price) : 0;
+    if (price > 0) {
       g.row = curRow;
+      g.priceHistory.push({ price, ts: now });
+      // 检测相邻分钟（间隔≥50s）波动是否≥0.5%
+      if (!g.pinned) {
+        const hist = g.priceHistory;
+        for (let i = hist.length - 1; i >= 1; i--) {
+          if (hist[i].ts - hist[i - 1].ts >= MIN_INTERVAL_MS) {
+            const move = Math.abs(hist[i].price - hist[i - 1].price) / hist[i - 1].price;
+            if (move >= MOVE_THRESH) {
+              g.pinned   = true;
+              g.pinnedAt = now;
+            }
+            break;
+          }
+        }
+      }
     }
-    // 清理过期
-    if (now - g.exitAt > GRACE_MS) graceMap.delete(sym);
+    // 清理：未置顶且监控期过，或置顶期过
+    const monitorExpired = now - g.exitAt > MONITOR_MS;
+    const pinnedExpired  = g.pinned && (now - g.pinnedAt > PINNED_MS);
+    if ((!g.pinned && monitorExpired) || pinnedExpired) graceMap.delete(sym);
   }
 
-  // 2. 检查之前通过的股票是否刚退出（只处理 prevPassSymbols 里有、现在没有的）
+  // 2. 之前通过、现在退出 → 加入监控（不显示，静默监控）
   for (const sym of prevPassSymbols) {
     if (!passSymbols.has(sym) && !graceMap.has(sym)) {
-      const row = allRows.find(r => r.symbol === sym);
-      if (!row) continue;  // 该股票已不在今日数据中，跳过
+      const row   = allRows.find(r => r.symbol === sym);
+      if (!row) continue;
+      const price = Number(row.last_price) || 0;
       graceMap.set(sym, {
-        exitAt:    now,
-        exitPrice: Number(row.last_price) || 0,
-        pinned:    false,
-        pinnedAt:  null,
+        exitAt:       now,
+        priceHistory: price > 0 ? [{ price, ts: now }] : [],
+        pinned:       false,
+        pinnedAt:     null,
         row,
       });
     }
-    // 重新满足条件，清除宽限期
-    if (passSymbols.has(sym) && graceMap.has(sym)) {
-      graceMap.delete(sym);
-    }
+    // 重新满足条件 → 退出监控
+    if (passSymbols.has(sym) && graceMap.has(sym)) graceMap.delete(sym);
   }
 
   // 3. 更新 prevPassSymbols
@@ -417,15 +464,15 @@ function updateGrace(passSymbols, allRows) {
 }
 
 function getGraceRows() {
+  // 只返回已触发置顶且置顶期未过的行
   const now = Date.now();
   return [...graceMap.entries()]
-    .filter(([, g]) => now - g.exitAt <= GRACE_MS && g.row)
-    .map(([sym, g]) => ({
+    .filter(([, g]) => g.pinned && g.row && now - g.pinnedAt <= PINNED_MS)
+    .map(([, g]) => ({
       ...g.row,
       _grace:    true,
-      _pinned:   g.pinned,
-      _exitAt:   g.exitAt,
-      _remainMs: GRACE_MS - (now - g.exitAt),
+      _pinned:   true,
+      _remainMs: PINNED_MS - (now - g.pinnedAt),
     }));
 }
 
@@ -479,11 +526,36 @@ function getV(id) {
   const v = document.getElementById(id)?.value.trim();
   return (!v || v === '') ? null : Number(v);
 }
+
+let filterOpen = false;
+function toggleFilter() {
+  filterOpen = !filterOpen;
+  document.getElementById('filterBody').classList.toggle('open', filterOpen);
+  document.getElementById('filterChevron').classList.toggle('open', filterOpen);
+}
+
 function updateHighlights() {
   FILTER_IDS.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('has-value', el.value.trim() !== '');
   });
+  const pairs = [
+    ['priceMin','priceMax','价格'],
+    ['changeMin','changeMax','涨跌%'],
+    ['volMin','volMax','成交量'],
+    ['changeAmtMin','changeAmtMax','涨跌额'],
+  ];
+  const pills = document.getElementById('filterPills');
+  if (!pills) return;
+  pills.innerHTML = pairs
+    .filter(([a, b]) => document.getElementById(a)?.value.trim() || document.getElementById(b)?.value.trim())
+    .map(([a, b, label]) => {
+      const va = document.getElementById(a)?.value.trim();
+      const vb = document.getElementById(b)?.value.trim();
+      const range = va && vb ? `${va}–${vb}` : va ? `≥${va}` : `≤${vb}`;
+      return `<span class="filter-pill">${label} ${range}</span>`;
+    })
+    .join('');
 }
 function clearFilters() {
   FILTER_IDS.forEach(id => {
@@ -591,19 +663,16 @@ function applyFilter() {
     return va < vb ? sortDir : va > vb ? -sortDir : 0;
   });
 
-  // 宽限期行：置顶的排最前，其余按退出时间降序
+  // 置顶行排最前，其余正常排序
   const graceRows = getGraceRows();
-  const pinnedRows = graceRows.filter(r => r._pinned)
-    .sort((a, b) => b._exitAt - a._exitAt);
-  const gracePlainRows = graceRows.filter(r => !r._pinned)
-    .sort((a, b) => b._exitAt - a._exitAt);
+  const pinnedRows = [...graceRows].sort((a, b) => b._remainMs - a._remainMs);
 
-  sortedData = [...pinnedRows, ...gracePlainRows, ...sorted];
+  sortedData = [...pinnedRows, ...sorted];
 
   const total = allData.filter(r => evalRow(r).passAll).length;
   document.getElementById('count-info').textContent =
     `全部通过 ${total} 只 · 当前筛选 ${sorted.length} 只` +
-    (graceRows.length ? ` · 宽限期 ${graceRows.length} 只` : '');
+    (graceRows.length ? ` · 置顶中 ${graceRows.length} 只` : '');
 
   renderTable();
 }
@@ -649,14 +718,13 @@ function buildRowHTML(r) {
   const vPct = Math.min(100, maxVol > 0 ? vol / maxVol * 100 : 0);
   const vr   = r.vol_ratio || 0;
 
-  // 宽限期徽标
+  // 置顶徽标
   let graceBadge = '';
-  if (r._grace || r._pinned) {
+  if (r._pinned) {
     const remainSec = Math.max(0, Math.ceil((r._remainMs || 0) / 1000));
     const mm = String(Math.floor(remainSec / 60)).padStart(2, '0');
     const ss = String(remainSec % 60).padStart(2, '0');
-    const label = r._pinned ? `📌 置顶 ${mm}:${ss}` : `⏱ ${mm}:${ss}`;
-    graceBadge = `<span class="grace-badge">${label}</span>`;
+    graceBadge = `<span class="grace-badge">📌 置顶 ${mm}:${ss}</span>`;
   }
 
   // 规则列：全部通过才显示，所以值只会是绿色
@@ -1041,12 +1109,12 @@ setInterval(() => {
   }
   document.getElementById('refresh-timer').textContent = `${countdown}s 后刷新`;
 
-  // 宽限期倒计时每秒刷新（如果有宽限期股票）
-  if (graceMap.size > 0) {
-    // 清理过期
+  // 置顶倒计时每秒刷新
+  const hasPinned = [...graceMap.values()].some(g => g.pinned);
+  if (hasPinned) {
     const now = Date.now();
     for (const [sym, g] of graceMap) {
-      if (now - g.exitAt > GRACE_MS) graceMap.delete(sym);
+      if (g.pinned && now - g.pinnedAt > PINNED_MS) graceMap.delete(sym);
     }
     renderTable();
   }

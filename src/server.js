@@ -1812,50 +1812,7 @@ app.get('/api/screener-large-orders-v2', async (req, res) => {
   }
 });
 
-app.get('/api/large-orders-screener', async (req, res) => {
-  try {
-    const minOrderVolume = Number(req.query.min_order_volume || 1000);
-    const timeWindowMins = Number(req.query.time_window_mins || 5);
-    const safeEtfList = etfList.length > 0 ? etfList : ['__NO_ETF__'];
-
-    const sql = `
-      WITH recent_large_orders AS (
-        SELECT DISTINCT ON (stock_code, side)
-            stock_code AS symbol, side, level, price AS order_price, volume AS order_volume, detected_at
-        FROM market_data.l2_large_orders_bl
-        WHERE detected_at >= NOW() - ($1 * INTERVAL '1 minute')
-          AND volume >= $2
-        ORDER BY stock_code, side, detected_at DESC
-      )
-      SELECT o.symbol, o.side, o.level, o.order_price, o.order_volume, o.detected_at,
-             d.open_price, d.close_price, d.total_volume
-      FROM recent_large_orders o
-      JOIN market_data.daily_summary d ON o.symbol = d.symbol AND d.trade_date = CURRENT_DATE
-      WHERE NOT (o.symbol = ANY($3::text[]))
-      ORDER BY o.detected_at DESC
-      LIMIT 100
-    `;
-
-    const { rows } = await pool.query(sql, [timeWindowMins, minOrderVolume, safeEtfList]);
-
-    const result = rows.map(row => {
-      const window = priceWindow.get(row.symbol);
-      let currentPrice;
-      if (window && window.length > 0) {
-        currentPrice = window[window.length - 1].price;
-      } else {
-        const cached = priceCache.get(row.symbol);
-        currentPrice = cached ? cached.price : Number(row.close_price);
-      }
-      return { ...row, current_price: currentPrice };
-    });
-
-    res.json(result);
-  } catch (e) {
-    console.error('Large orders screener error:', e);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
+// /api/large-orders-screener 已停用（large-orders.html 页面不再使用）
 
 // === 山丘形放量查询 API ===
 app.get('/api/patterns/flexible-hills', async (req, res) => {
@@ -2680,7 +2637,7 @@ app.get('/volume-alerts',   (req, res) => res.sendFile(path.join(__dirname, '../
 app.get('/hills',           (req, res) => res.sendFile(path.join(__dirname, '../public/hills.html')));
 app.get('/hill-alerts',     (req, res) => res.sendFile(path.join(__dirname, '../public/hill-alerts.html')));
 app.get('/ranking',         (req, res) => res.sendFile(path.join(__dirname, '../public/ranking.html')));
-app.get('/large-orders',    (req, res) => res.sendFile(path.join(__dirname, '../public/large-orders.html')));
+// /large-orders 页面已停用
 app.get('/l2-alerts',       (req, res) => res.sendFile(path.join(__dirname, '../public/l2_alert_history.html')));
 app.get('/swing-screener',  (req, res) => res.sendFile(path.join(__dirname, '../public/swing-screener.html')));
 app.get('/screener',        (req, res) => res.sendFile(path.join(__dirname, '../public/screener.html')));
