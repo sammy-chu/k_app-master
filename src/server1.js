@@ -172,6 +172,28 @@ async function ensureTables() {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS stable_screener_snapshot (
+        symbol      TEXT     NOT NULL,
+        trade_date  DATE     NOT NULL,
+        snap_time   TIME     NOT NULL,
+        last_price  NUMERIC(12,4),
+        open_price  NUMERIC(12,4),
+        change_pct  NUMERIC(8,4),
+        bars_count  SMALLINT,
+        r1_val      NUMERIC(8,4),
+        r2_vol      NUMERIC(14,2),
+        r3_pct      NUMERIC(8,4),
+        r4_pct      NUMERIC(8,4),
+        r5_cnt      SMALLINT,
+        r6_a        SMALLINT,
+        r6_b        SMALLINT,
+        pass_all    BOOLEAN  NOT NULL DEFAULT FALSE,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (symbol, trade_date, snap_time)
+      );
+    `);
+
     console.log('Tables ensured');
   } catch (err) {
     console.error('Error ensuring tables:', err);
@@ -351,7 +373,7 @@ function _isLargeOrder(vol, levels) {
 async function _fetchOrderBook(intervalMins) {
   const client = await pricePool.connect();
   try {
-    await client.query('SET statement_timeout = 8000');
+    await client.query('SET statement_timeout = 15000');
     const { rows } = await client.query(`
       SELECT s.symbol, ob.bid_depth, ob.ask_depth, ob.received_at
       FROM (
@@ -569,6 +591,127 @@ function snapshotStableHistory() {
     } else {
       hist.push(entry);
     }
+  }
+}
+
+
+// === 稳定选股快照写入 ===
+// 每60s从内存 window10m + rankingCache 批量 upsert 当前分钟所有活跃股票的规则指标值
+async function writeStableSnapshot() {
+  const now = new Date();
+  const bj  = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+  const h = bj.getHours(), m = bj.getMinutes();
+  if (h < 8 || (h === 15 && m > 0) || h > 15) return;
+
+  const tradeDate = `${bj.getFullYear()}-${String(bj.getMonth()+1).padStart(2,'0')}-${String(bj.getDate()).padStart(2,'0')}`;
+  const snapTime  = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`;
+
+  const rows = [];
+  for (const row of rankingCache) {
+    const bars      = window10m.get(row.symbol);
+    if (!bars || bars.length === 0) continue;
+    const price     = Number(row.last_price);
+    const openPrice = Number(row.open_price) || price;
+    if (!price) continue;
+
+    const winHigh   = Math.max(...bars.map(b => b.high));
+    const winLow    = Math.min(...bars.map(b => b.low));
+    const r1_val    = Number(((winHigh - winLow) / price * 100).toFixed(4));
+    const r2_vol    = bars.reduce((s, b) => s + b.volume, 0);
+    const avgClose  = bars.reduce((s, b) => s + b.close, 0) / bars.length;
+    const r3_pct    = avgClose > 0 ? Number((Math.abs(price - avgClose) / avgClose * 100).toFixed(4)) : null;
+    const firstMid  = (bars[0].high + bars[0].low) / 2;
+    const lastMid   = (bars[bars.length - 1].high + bars[bars.length - 1].low) / 2;
+    const r4_pct    = lastMid > 0 ? Number((Math.abs(firstMid - lastMid) / lastMid * 100).toFixed(4)) : null;
+    const r35Thresh = getR35Thresh(openPrice);
+    const r5_bars   = bars.slice(-STABLE_R5_WINDOW);
+    const r5_cnt    = r5_bars.filter(b => b.open > 0 && Math.abs(b.close - b.open) / b.open < r35Thresh).length;
+
+    const r6Range = winHigh - winLow;
+    let r6_a = 0, r6_b = 0;
+    if (r6Range > 0) {
+      const priceA = winLow + r6Range * 0.15;
+      const priceB = winLow + r6Range * 0.85;
+      r6_a = bars.filter(b => b.low  < priceA).length;
+      r6_b = bars.filter(b => b.high > priceB).length;
+    }
+
+    const r4T    = getR4Thresh(openPrice);
+    const pass_all = (
+      r1_val < STABLE_R1 &&
+      r2_vol >= STABLE_R2 &&
+      r3_pct !== null && r3_pct < r35Thresh * 100 &&
+      r4_pct !== null && r4_pct < r4T * 100 &&
+      r5_cnt >= STABLE_R5_MIN &&
+      (r6_a >= 3 || r6_b >= 3)
+    );
+
+    rows.push([
+      row.symbol, tradeDate, snapTime,
+      price, openPrice, Number(row.change_pct),
+      bars.length,
+      r1_val, r2_vol, r3_pct, r4_pct, r5_cnt, r6_a, r6_b,
+      pass_all,
+    ]);
+  }
+
+  if (rows.length === 0) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('SET statement_timeout = 20000');
+    const BATCH = 500;
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const batch  = rows.slice(i, i + BATCH);
+      const values = [];
+      const params = [];
+      let   pi     = 1;
+      for (const r of batch) {
+        values.push(`($${pi},$${pi+1},$${pi+2},$${pi+3},$${pi+4},$${pi+5},$${pi+6},$${pi+7},$${pi+8},$${pi+9},$${pi+10},$${pi+11},$${pi+12},$${pi+13},$${pi+14})`);
+        params.push(...r);
+        pi += 15;
+      }
+      await client.query(`
+        INSERT INTO stable_screener_snapshot
+          (symbol, trade_date, snap_time,
+           last_price, open_price, change_pct, bars_count,
+           r1_val, r2_vol, r3_pct, r4_pct, r5_cnt, r6_a, r6_b, pass_all)
+        VALUES ${values.join(',')}
+        ON CONFLICT (symbol, trade_date, snap_time) DO UPDATE SET
+          last_price = EXCLUDED.last_price,
+          open_price = EXCLUDED.open_price,
+          change_pct = EXCLUDED.change_pct,
+          bars_count = EXCLUDED.bars_count,
+          r1_val     = EXCLUDED.r1_val,
+          r2_vol     = EXCLUDED.r2_vol,
+          r3_pct     = EXCLUDED.r3_pct,
+          r4_pct     = EXCLUDED.r4_pct,
+          r5_cnt     = EXCLUDED.r5_cnt,
+          r6_a       = EXCLUDED.r6_a,
+          r6_b       = EXCLUDED.r6_b,
+          pass_all   = EXCLUDED.pass_all,
+          created_at = NOW()
+      `, params);
+    }
+    console.log(`[StableSnapshot] Wrote ${rows.length} rows @ ${snapTime}`);
+  } catch (err) {
+    console.error('[StableSnapshot] Write failed:', err.message);
+  } finally {
+    await client.query('SET statement_timeout = 0').catch(() => {});
+    client.release();
+  }
+}
+
+// 清理7天前的快照数据（每天07:55重置时执行）
+async function pruneStableSnapshot() {
+  try {
+    const { rowCount } = await pool.query(`
+      DELETE FROM stable_screener_snapshot
+      WHERE trade_date < current_date - INTERVAL '7 days'
+    `);
+    if (rowCount > 0) console.log(`[StableSnapshot] Pruned ${rowCount} old rows`);
+  } catch (err) {
+    console.error('[StableSnapshot] Prune failed:', err.message);
   }
 }
 
@@ -1669,50 +1812,7 @@ app.get('/api/screener-large-orders-v2', async (req, res) => {
   }
 });
 
-app.get('/api/large-orders-screener', async (req, res) => {
-  try {
-    const minOrderVolume = Number(req.query.min_order_volume || 1000);
-    const timeWindowMins = Number(req.query.time_window_mins || 5);
-    const safeEtfList = etfList.length > 0 ? etfList : ['__NO_ETF__'];
-
-    const sql = `
-      WITH recent_large_orders AS (
-        SELECT DISTINCT ON (stock_code, side)
-            stock_code AS symbol, side, level, price AS order_price, volume AS order_volume, detected_at
-        FROM market_data.l2_large_orders_bl
-        WHERE detected_at >= NOW() - ($1 * INTERVAL '1 minute')
-          AND volume >= $2
-        ORDER BY stock_code, side, detected_at DESC
-      )
-      SELECT o.symbol, o.side, o.level, o.order_price, o.order_volume, o.detected_at,
-             d.open_price, d.close_price, d.total_volume
-      FROM recent_large_orders o
-      JOIN market_data.daily_summary d ON o.symbol = d.symbol AND d.trade_date = CURRENT_DATE
-      WHERE NOT (o.symbol = ANY($3::text[]))
-      ORDER BY o.detected_at DESC
-      LIMIT 100
-    `;
-
-    const { rows } = await pool.query(sql, [timeWindowMins, minOrderVolume, safeEtfList]);
-
-    const result = rows.map(row => {
-      const window = priceWindow.get(row.symbol);
-      let currentPrice;
-      if (window && window.length > 0) {
-        currentPrice = window[window.length - 1].price;
-      } else {
-        const cached = priceCache.get(row.symbol);
-        currentPrice = cached ? cached.price : Number(row.close_price);
-      }
-      return { ...row, current_price: currentPrice };
-    });
-
-    res.json(result);
-  } catch (e) {
-    console.error('Large orders screener error:', e);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
+// /api/large-orders-screener 已停用（large-orders.html 页面不再使用）
 
 // === 山丘形放量查询 API ===
 app.get('/api/patterns/flexible-hills', async (req, res) => {
@@ -2068,8 +2168,9 @@ async function updateDailySummary() {
   try {
     // ── Step 1：增量 upsert（close/high/low/volume）──────────────────────────
     // 首次运行扫当日08:00至今（全天冷启动），之后每轮只扫约60s增量。
-    // 给 Step 1 单独设 timeout：首次全天量允许更长，正常增量极快。
+    // work_mem=64MB：Sort 约需 30MB，内存中完成避免溢盘（session级，释放后还原）
     await client.query('SET statement_timeout = 25000');
+    await client.query("SET work_mem = '64MB'");
     await client.query(`
       INSERT INTO market_data.daily_summary
         (symbol, trade_date, open_price, close_price, high_price, low_price, total_volume)
@@ -2105,6 +2206,7 @@ async function updateDailySummary() {
     // openPriceDone = true 后整个 Step 2 跳过，日常几乎零开销。
     if (!openPriceDone) {
       await client.query('SET statement_timeout = 20000');
+      await client.query("SET work_mem = '64MB'");
       const fixResult = await client.query(`
         UPDATE market_data.daily_summary ds
         SET open_price = sub.open_price
@@ -2244,10 +2346,10 @@ async function scanAllVolumeAlerts() {
         FROM today_vol t
         JOIN hist h USING (symbol)
         WHERE h.avg_vol > 0
-          AND (t.cum_vol / NULLIF(h.avg_vol, 0)) >= $4::numeric
+          AND (t.cum_vol / NULLIF(h.avg_vol, 0)) >= $3::numeric
       `;
 
-      const candidates = await pool.query(selectSql, [today, VOLUME_HISTORY_DAYS, ruleId, cp.expected_pct]);
+      const candidates = await pool.query(selectSql, [today, VOLUME_HISTORY_DAYS, cp.expected_pct]);
 
       if (candidates.rowCount === 0) continue;
 
@@ -2257,7 +2359,7 @@ async function scanAllVolumeAlerts() {
       for (let i = 0; i < candidates.rows.length; i += BATCH_SIZE) {
         const batch = candidates.rows.slice(i, i + BATCH_SIZE);
         const values = batch.map((_, j) => {
-          const base = j * 4;
+          const base = j * 5;
           return `($${base+1}, $${base+2}::date::timestamp, $${base+3}, $${base+4}, $${base+5}, '${ruleId}', now())`;
         }).join(',');
         const params = batch.flatMap(r => [r.symbol, today, r.volume_ratio, r.cum_vol, r.avg_vol]);
@@ -2474,6 +2576,12 @@ function startAlertMonitor() {
     runScan('IntradayVolWriter', writeIntradayVolMinute, 60000);
   }, 45000);
 
+  // ── t=55s：StableSnapshot（主池，60s，在 Window10m 刷新后写入）────────────
+  setTimeout(() => {
+    console.log(`[StableSnapshot] starting, interval=60s`);
+    runScan('StableSnapshot', writeStableSnapshot, 60000);
+  }, 55000);
+
   // ── t=0s：VolumeMonitor（主池，300s，立即启动）───────────────────────────
   console.log(`[VolumeMonitor] starting, interval=${VOLUME_SCAN_INTERVAL / 1000}s, ratio>=${VOLUME_RATIO_THRESHOLD}x OR z>=${VOLUME_Z_THRESHOLD}, default_history=${VOLUME_HISTORY_DAYS}d`);
   runScan('VolumeMonitor', scanAllVolumeAlerts, VOLUME_SCAN_INTERVAL);
@@ -2511,6 +2619,7 @@ function startAlertMonitor() {
       lastDailySummaryRunAt = null;
       openPriceDone = false;
       console.log('[StableHistory] cleared for new trading day');
+      pruneStableSnapshot();
       console.log('[DailySummary] open_price flag reset for new trading day');
     }
   }, 60000);
@@ -2528,7 +2637,7 @@ app.get('/volume-alerts',   (req, res) => res.sendFile(path.join(__dirname, '../
 app.get('/hills',           (req, res) => res.sendFile(path.join(__dirname, '../public/hills.html')));
 app.get('/hill-alerts',     (req, res) => res.sendFile(path.join(__dirname, '../public/hill-alerts.html')));
 app.get('/ranking',         (req, res) => res.sendFile(path.join(__dirname, '../public/ranking.html')));
-app.get('/large-orders',    (req, res) => res.sendFile(path.join(__dirname, '../public/large-orders.html')));
+// /large-orders 页面已停用
 app.get('/l2-alerts',       (req, res) => res.sendFile(path.join(__dirname, '../public/l2_alert_history.html')));
 app.get('/swing-screener',  (req, res) => res.sendFile(path.join(__dirname, '../public/swing-screener.html')));
 app.get('/screener',        (req, res) => res.sendFile(path.join(__dirname, '../public/screener.html')));

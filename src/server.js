@@ -511,17 +511,17 @@ async function updateWindow10m() {
   snapshotStableHistory();
 }
 
-const STABLE_R1 = 1.2, STABLE_R2 = 310, STABLE_R5_WINDOW = 7, STABLE_R5_MIN = 6;
+const STABLE_R1 = 1.2, STABLE_R2 = 310, STABLE_R5_WINDOW = 10, STABLE_R5_MIN = 6;
 
 // R3/R5 共用阈值：按开盘价分档（"低于X按X算"向上取边界）
-// 开盘价 < 125 → 0.05%；125~267 → 0.04%；267~480 → 0.03%；480~1000 → 0.025%；≥1000 → 0.015%
+// 开盘价 < 125 → 0.5%；125~267 → 0.4%；267~480 → 0.3%；480~1000 → 0.25%；≥1000 → 0.15%
 function getR35Thresh(openPrice) {
   const p = Math.max(openPrice, 0);
-  if (p < 125)  return 0.0005;   // 0.05%
-  if (p < 267)  return 0.0004;   // 0.04%
-  if (p < 480)  return 0.0003;   // 0.03%
-  if (p < 1000) return 0.00025;  // 0.025%
-  return 0.00015;                 // 0.015%
+  if (p < 125)  return 0.005;   // 0.5%
+  if (p < 267)  return 0.004;   // 0.4%
+  if (p < 480)  return 0.003;   // 0.3%
+  if (p < 1000) return 0.0025;  // 0.25%
+  return 0.0015;                 // 0.15%
 }
 
 // R4 阈值：按开盘价分档（价格低于最低边界按最低边界算）

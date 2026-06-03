@@ -358,7 +358,7 @@
       <span class="rule-tag">R2 量≥310</span>
       <span class="rule-tag">R3 价偏分档</span>
       <span class="rule-tag">R4 漂移分档</span>
-      <span class="rule-tag">R5 ≥6/7分钟安静</span>
+      <span class="rule-tag">R5 ≥6/10分钟安静</span>
       <span class="rule-tag">R6 触轨a≥3或b≥3</span>
     </div>
     <span id="count-info">—</span>
@@ -378,7 +378,7 @@
         <th onclick="sortBy('r2_vol')" title="7分钟总量，≥310">R2 量</th>
         <th onclick="sortBy('r3_pct')" title="现价偏离均价%，按开盘价分档">R3 价偏%</th>
         <th onclick="sortBy('r4_pct')" title="首尾中间价漂移%，按开盘价分档">R4 漂%</th>
-        <th onclick="sortBy('r5_cnt')" title="最近7分钟内安静分钟数，≥6">R5 分钟</th>
+        <th onclick="sortBy('r5_cnt')" title="最近10分钟内安静分钟数，≥6">R5 分钟</th>
         <th onclick="sortBy('r6_a')" title="7分钟触下轨(a)和上轨(b)的K线数，a≥3或b≥3才通过">R6 触轨</th>
       </tr>
     </thead>
@@ -484,11 +484,11 @@ const SORT_KEYS = [
 // ── 分档阈值函数（与 server.js 保持一致）─────────────────────────────────
 function getR35Thresh(openPrice) {
   const p = Math.max(Number(openPrice) || 0, 0);
-  if (p < 125)  return 0.05;   // %
-  if (p < 267)  return 0.04;
-  if (p < 480)  return 0.03;
-  if (p < 1000) return 0.025;
-  return 0.015;
+  if (p < 125)  return 0.5;   // %
+  if (p < 267)  return 0.4;
+  if (p < 480)  return 0.3;
+  if (p < 1000) return 0.25;
+  return 0.15;
 }
 function getR4Thresh(openPrice) {
   const p = Math.max(Number(openPrice) || 0, 0);
@@ -1052,8 +1052,8 @@ function renderLookup(sym) {
       title: 'R5 安静分钟',
       pass: ev.r5_pass,
       value: row.r5_cnt != null ? row.r5_cnt+'分钟' : '—',
-      threshold: '≥ 6 / 7分钟',
-      desc: '最近7根K线｜阈值同R3按开盘价分档',
+      threshold: '≥ 6 / 10分钟',
+      desc: '最近10根K线｜阈值同R3按开盘价分档',
     },
     {
       title: 'R6 触轨计数',
