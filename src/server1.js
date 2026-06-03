@@ -548,11 +548,22 @@ function snapshotStableHistory() {
     if (r4_pct === null || r4_pct >= getR4Thresh(openPrice) * 100) continue;
     if (r5_cnt <  STABLE_R5_MIN) continue;
 
+    // R6: 7分钟内触下轨/上轨的K线数，a >= 3 或 b >= 3 才通过
+    const r6Range = winHigh - winLow;
+    let r6_a = 0, r6_b = 0;
+    if (r6Range > 0) {
+      const priceA = winLow + r6Range * 0.15;
+      const priceB = winLow + r6Range * 0.85;
+      r6_a = bars.filter(b => b.low  < priceA).length;
+      r6_b = bars.filter(b => b.high > priceB).length;
+    }
+    if (r6_a < 3 && r6_b < 3) continue;
+
     if (!stableHistory.has(row.symbol)) stableHistory.set(row.symbol, []);
     const hist   = stableHistory.get(row.symbol);
     const minute = timeStr.slice(0, 5);
     const last   = hist[hist.length - 1];
-    const entry  = { time: timeStr, r1_val, r2_vol, r3_pct, r4_pct, r5_cnt, last_price: price, change_pct: changePct };
+    const entry  = { time: timeStr, r1_val, r2_vol, r3_pct, r4_pct, r5_cnt, r6_a, r6_b, last_price: price, change_pct: changePct };
     if (last && last.time.slice(0, 5) === minute) {
       hist[hist.length - 1] = entry;
     } else {
@@ -1329,12 +1340,14 @@ app.get('/api/screener', (req, res) => {
 });
 
 // === 稳定选股器 API ===
-// 在自由选股器基础上叠加 5 条稳定性规则（全部基于 window10m 内存缓存，不查库）
+// 在自由选股器基础上叠加 6 条稳定性规则（全部基于 window10m 内存缓存，不查库）
 // R1: 7分钟内 high-low < 现价 × 1.2%
 // R2: 7分钟内总成交量 >= 310
 // R3: |现价 - 7分钟收盘均价| / 均价 < 按开盘价分档阈值（0.05%/0.04%/0.03%/0.025%/0.015%）
 // R4: |首根中间价 - 末根中间价| / 末根中间价 < 按开盘价分档阈值（0.3%/0.2%/0.15%/0.1%）
 // R5: 最近7根K线中，|close-open|/open < R3/R5阈值 的分钟数 >= 6
+// R6: 7分钟周期内，触下轨(low < A)的K线数 >= 3，或触上轨(high > B)的K线数 >= 3 才通过
+//     A = winLow + (winHigh - winLow) * 0.15，B = winLow + (winHigh - winLow) * 0.85
 app.get('/api/screener-stable', (req, res) => {
   try {
     const q = req.query;
@@ -1371,6 +1384,7 @@ app.get('/api/screener-stable', (req, res) => {
 
       // 数据不足时仍返回，但规则字段为 null（前端显示"—"）
       let r1_val = null, r2_vol = null, r3_pct = null, r4_pct = null, r5_cnt = null;
+      let r6_a = null, r6_b = null;
 
       if (bars && bars.length > 0) {
         // R1: 7分钟振幅 % = (windowHigh - windowLow) / price * 100
@@ -1400,6 +1414,21 @@ app.get('/api/screener-stable', (req, res) => {
         r5_cnt = r5_bars.filter(b =>
           b.open > 0 && Math.abs(b.close - b.open) / b.open < r35Thresh
         ).length;
+
+        // R6: 7分钟内触下轨/上轨的K线数（a >= 3 或 b >= 3 才通过）
+        // 预警价A = winLow + (winHigh - winLow) * 0.15（下轨）
+        // 预警价B = winLow + (winHigh - winLow) * 0.85（上轨）
+        const r6Range = winHigh - winLow;
+        if (r6Range > 0) {
+          const priceA = winLow + r6Range * 0.15;
+          const priceB = winLow + r6Range * 0.85;
+          r6_a = bars.filter(b => b.low  < priceA).length;
+          r6_b = bars.filter(b => b.high > priceB).length;
+        } else {
+          // 所有K线价格完全相同，无上下轨意义，视为不触轨
+          r6_a = 0;
+          r6_b = 0;
+        }
       }
 
       // quote
@@ -1428,6 +1457,8 @@ app.get('/api/screener-stable', (req, res) => {
         r3_pct,   // 现价偏离均价%，按开盘价分档阈值
         r4_pct,   // 首尾中间价漂移%，按开盘价分档阈值
         r5_cnt,   // 最近7根K线中安静分钟数，>= 6 为通过
+        r6_a,     // 触下轨(low < A)的K线数，a >= 3 或 b >= 3 为通过
+        r6_b,     // 触上轨(high > B)的K线数，a >= 3 或 b >= 3 为通过
         bars_count: bars ? bars.length : 0,
       });
     }
@@ -1445,6 +1476,100 @@ app.get('/api/screener-stable/history', (req, res) => {
   if (!symbol) return res.status(400).json({ error: 'symbol required' });
   res.json({ symbol, records: stableHistory.get(symbol) || [] });
 });
+
+// 单时间点诊断：查快照表，返回该分钟的完整规则诊断
+// GET /api/screener-stable/diagnose?symbol=AAPL&time=10:23
+app.get('/api/screener-stable/diagnose', async (req, res) => {
+  const symbol  = (req.query.symbol || '').trim().toUpperCase();
+  const timeQ   = (req.query.time   || '').trim();
+  if (!symbol) return res.status(400).json({ error: 'symbol required' });
+  if (!timeQ)  return res.status(400).json({ error: 'time required, format HH:MM' });
+  const snapTime = timeQ.length === 5 ? timeQ + ':00' : timeQ.slice(0, 8);
+  try {
+    const { rows } = await pool.query(`
+      SELECT * FROM stable_screener_snapshot
+      WHERE symbol = $1 AND trade_date = current_date AND snap_time = $2::time
+    `, [symbol, snapTime]);
+    if (rows.length === 0) return res.json({ symbol, snap_time: snapTime, found: false });
+    res.json({ symbol, snap_time: snapTime, found: true, ...buildDiagnoseResult(rows[0]) });
+  } catch (e) {
+    console.error('[diagnose] error:', e.message);
+    res.status(500).json({ error: 'diagnose_failed' });
+  }
+});
+
+// 时间段诊断：返回 [from, to] 内每分钟的快照列表
+// GET /api/screener-stable/diagnose-range?symbol=AAPL&from=10:00&to=10:30
+app.get('/api/screener-stable/diagnose-range', async (req, res) => {
+  const symbol = (req.query.symbol || '').trim().toUpperCase();
+  const fromQ  = (req.query.from   || '').trim();
+  const toQ    = (req.query.to     || '').trim();
+  if (!symbol) return res.status(400).json({ error: 'symbol required' });
+  if (!fromQ || !toQ) return res.status(400).json({ error: 'from and to required, format HH:MM' });
+  const fromTime = fromQ.length === 5 ? fromQ + ':00' : fromQ.slice(0, 8);
+  const toTime   = toQ.length   === 5 ? toQ   + ':00' : toQ.slice(0, 8);
+  try {
+    const { rows } = await pool.query(`
+      SELECT * FROM stable_screener_snapshot
+      WHERE symbol     = $1
+        AND trade_date = current_date
+        AND snap_time >= $2::time
+        AND snap_time <= $3::time
+      ORDER BY snap_time ASC
+    `, [symbol, fromTime, toTime]);
+    const records = rows.map(r => ({ snap_time: r.snap_time, ...buildDiagnoseResult(r) }));
+    res.json({ symbol, from: fromTime, to: toTime, count: records.length, records });
+  } catch (e) {
+    console.error('[diagnose-range] error:', e.message);
+    res.status(500).json({ error: 'diagnose_range_failed' });
+  }
+});
+
+// 共用：把快照行转成规则诊断结构
+function buildDiagnoseResult(s) {
+  const openPrice = Number(s.open_price);
+  const r35Thresh = getR35Thresh(openPrice);
+  const r4Thresh  = getR4Thresh(openPrice);
+  const rules = [
+    { id:'R1', label:'振幅',      cmp:'lt',       unit:'%',  threshold: STABLE_R1,
+      value: s.r1_val !== null ? Number(s.r1_val) : null,
+      pass:  s.r1_val !== null ? Number(s.r1_val) < STABLE_R1 : null },
+    { id:'R2', label:'成交量',    cmp:'gte',      unit:'股', threshold: STABLE_R2,
+      value: s.r2_vol !== null ? Number(s.r2_vol) : null,
+      pass:  s.r2_vol !== null ? Number(s.r2_vol) >= STABLE_R2 : null },
+    { id:'R3', label:'价格偏离',  cmp:'lt',       unit:'%',  threshold: Number((r35Thresh*100).toFixed(4)),
+      value: s.r3_pct !== null ? Number(s.r3_pct) : null,
+      pass:  s.r3_pct !== null ? Number(s.r3_pct) < r35Thresh*100 : null },
+    { id:'R4', label:'中间价漂移',cmp:'lt',       unit:'%',  threshold: Number((r4Thresh*100).toFixed(4)),
+      value: s.r4_pct !== null ? Number(s.r4_pct) : null,
+      pass:  s.r4_pct !== null ? Number(s.r4_pct) < r4Thresh*100 : null },
+    { id:'R5', label:'安静分钟',  cmp:'gte',      unit:'分钟',threshold: STABLE_R5_MIN,
+      value: s.r5_cnt !== null ? Number(s.r5_cnt) : null,
+      pass:  s.r5_cnt !== null ? Number(s.r5_cnt) >= STABLE_R5_MIN : null },
+    { id:'R6', label:'触轨',      cmp:'gte_either',unit:'根', threshold: 3,
+      value: (s.r6_a !== null && s.r6_b !== null) ? { a: Number(s.r6_a), b: Number(s.r6_b) } : null,
+      pass:  (s.r6_a !== null && s.r6_b !== null) ? (Number(s.r6_a) >= 3 || Number(s.r6_b) >= 3) : null },
+  ];
+  for (const r of rules) {
+    if (r.pass === null || r.value === null || r.pass) { r.delta = null; continue; }
+    if (r.id === 'R6') {
+      r.delta = `差 ${r.threshold - Math.max(r.value.a, r.value.b)} 根`;
+    } else if (r.cmp === 'lt') {
+      r.delta = `超出 ${(r.value - r.threshold).toFixed(4)}${r.unit}`;
+    } else {
+      r.delta = `差 ${(r.threshold - r.value).toFixed(r.id === 'R5' ? 0 : 4)}${r.unit}`;
+    }
+  }
+  return {
+    pass_all:   Boolean(s.pass_all),
+    last_price: Number(s.last_price),
+    open_price: openPrice,
+    change_pct: Number(s.change_pct),
+    bars_count: Number(s.bars_count),
+    rules,
+  };
+}
+
 app.get('/api/volume-surge-today', (req, res) => {
   res.json([...volumeSurgeToday]);
 });
