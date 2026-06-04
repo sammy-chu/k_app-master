@@ -904,7 +904,7 @@ app.get('/api/l2-alert-history', async (req, res) => {
       LIMIT $1
     `;
 
-    const { rows } = await pool.query(sql, params);
+    const { rows } = await pricePool.query(sql, params);
 
     // 用 priceCache 实时计算当日涨跌幅，与 /api/ranking 逻辑保持一致
     const enriched = rows.map(row => {
@@ -1769,7 +1769,7 @@ app.get('/api/screener-large-orders-v2', async (req, res) => {
     const maxVol = Number(req.query.max_vol || 0);
 
     // 取最近10分钟，L1~L3，每个 symbol × side × level 取最新一条
-    const { rows } = await pool.query(`
+    const { rows } = await pricePool.query(`
       SELECT DISTINCT ON (stock_code, alert_type, level)
         stock_code,
         alert_type,
