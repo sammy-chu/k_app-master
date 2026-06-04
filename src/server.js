@@ -1075,7 +1075,7 @@ async function writeIntradayVolMinute() {
   // 08:00 前或 17:00 后不写入，避免收盘后产生大量重复记录
   if (beijingMins < 8 * 60 || beijingMins >= 17 * 60) return;
 
-  const client = await pool.connect();
+  const client = await pricePool.connect();
   try {
     await client.query('SET statement_timeout = 15000');
     // 每次写入：从开盘到当前分钟截断时刻的全天累计量
@@ -2169,19 +2169,18 @@ async function updateDailySummary() {
     // ── Step 1：增量 upsert（close/high/low/volume）──────────────────────────
     // 首次运行扫当日08:00至今（全天冷启动），之后每轮只扫约60s增量。
     // work_mem=64MB：Sort 约需 30MB，内存中完成避免溢盘（session级，释放后还原）
+    // close_price 从内存 priceCache 读，不查库（避免 array_agg 全量排序超时）
+    // total_volume 覆盖而非累加，解决重启后虚增问题
     await client.query('SET statement_timeout = 25000');
     await client.query("SET work_mem = '64MB'");
-    await client.query(`
-      INSERT INTO market_data.daily_summary
-        (symbol, trade_date, open_price, close_price, high_price, low_price, total_volume)
+
+    const { rows: aggRows } = await client.query(`
       SELECT
         symbol,
-        (received_at AT TIME ZONE 'Asia/Shanghai')::date           AS trade_date,
-        NULL::numeric                                               AS open_price,
-        (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close_price,
-        MAX(price::numeric)                                         AS high_price,
-        MIN(price::numeric)                                         AS low_price,
-        SUM(size::numeric)                                          AS total_volume
+        (received_at AT TIME ZONE 'Asia/Shanghai')::date AS trade_date,
+        MAX(price::numeric) AS high_price,
+        MIN(price::numeric) AS low_price,
+        SUM(size::numeric)  AS total_volume
       FROM market_data.tos_trades
       WHERE received_at >  $1::timestamptz
         AND received_at <= $2::timestamptz
@@ -2191,14 +2190,36 @@ async function updateDailySummary() {
         AND trim(trade_time)::time
               <= (received_at AT TIME ZONE 'Asia/Shanghai')::time + interval '1 second'
       GROUP BY symbol, (received_at AT TIME ZONE 'Asia/Shanghai')::date
-      ON CONFLICT (symbol, trade_date) DO UPDATE SET
-        close_price  = EXCLUDED.close_price,
-        high_price   = GREATEST(daily_summary.high_price,  EXCLUDED.high_price),
-        low_price    = LEAST(daily_summary.low_price,      EXCLUDED.low_price),
-        total_volume = COALESCE(daily_summary.total_volume, 0) + EXCLUDED.total_volume
     `, [scanFrom, scanTo]);
 
-    // Step 1 成功后立即推进时间戳，即使 Step 2 失败也不会丢 close/high/low/volume
+    if (aggRows.length > 0) {
+      const BATCH = 500;
+      for (let i = 0; i < aggRows.length; i += BATCH) {
+        const batch = aggRows.slice(i, i + BATCH);
+        const values = [];
+        const params = [];
+        let pi = 1;
+        for (const r of batch) {
+          const cached = priceCache.get(r.symbol);
+          const closePrice = (cached && cached.price > 0) ? cached.price : null;
+          values.push(`($${pi},$${pi+1},NULL,$${pi+2},$${pi+3},$${pi+4},$${pi+5})`);
+          params.push(r.symbol, r.trade_date, closePrice, r.high_price, r.low_price, r.total_volume);
+          pi += 6;
+        }
+        await client.query(`
+          INSERT INTO market_data.daily_summary
+            (symbol, trade_date, open_price, close_price, high_price, low_price, total_volume)
+          VALUES ${values.join(',')}
+          ON CONFLICT (symbol, trade_date) DO UPDATE SET
+            close_price  = COALESCE(EXCLUDED.close_price, daily_summary.close_price),
+            high_price   = GREATEST(daily_summary.high_price,  EXCLUDED.high_price),
+            low_price    = LEAST(daily_summary.low_price,       EXCLUDED.low_price),
+            total_volume = EXCLUDED.total_volume
+        `, params);
+      }
+    }
+
+    // Step 1 成功后立即推进时间戳
     lastDailySummaryRunAt = scanTo;
 
     // ── Step 2：open_price 补写（仅首次或偏差纠错时执行）────────────────────
