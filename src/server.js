@@ -538,7 +538,7 @@ function snapshotStableHistory() {
   const now = new Date();
   const bj  = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
   const h = bj.getHours(), m = bj.getMinutes();
-  if (h < 8 || h >= 15) return;
+  if (h < 8 || h >= 17) return;
 
   const timeStr = bj.toTimeString().slice(0, 8);
 
@@ -601,7 +601,7 @@ async function writeStableSnapshot() {
   const now = new Date();
   const bj  = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
   const h = bj.getHours(), m = bj.getMinutes();
-  if (h < 8 || (h === 15 && m > 0) || h > 15) return;
+  if (h < 8 || h >= 17) return;
 
   const tradeDate = `${bj.getFullYear()}-${String(bj.getMonth()+1).padStart(2,'0')}-${String(bj.getDate()).padStart(2,'0')}`;
   const snapTime  = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`;
