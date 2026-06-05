@@ -483,7 +483,7 @@ async function updateWindow10m() {
         (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close,
         COALESCE(SUM(size::numeric), 0)                                   AS volume
       FROM tos_trades
-      WHERE received_at >= NOW() - INTERVAL '7 minutes'
+      WHERE received_at >= NOW() - INTERVAL '10 minutes'
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
         AND price IS NOT NULL
         AND price::numeric > 0
@@ -2161,6 +2161,7 @@ async function updateDailySummary() {
 
   // 增量起点：首次运行取当日08:00（北京时间），之后取上次成功时间
   const dayOpenStr = `${todayStr}T08:00:00+08:00`;
+  const isColdStart = lastDailySummaryRunAt === null;  // 冷启动覆盖，增量累加
   const scanFrom = lastDailySummaryRunAt ?? dayOpenStr;
   const scanTo   = new Date().toISOString();
 
@@ -2187,8 +2188,6 @@ async function updateDailySummary() {
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
         AND price IS NOT NULL AND price::numeric > 0
         AND market_time IS NOT NULL AND market_time != ''
-        AND trim(trade_time)::time
-              <= (received_at AT TIME ZONE 'Asia/Shanghai')::time + interval '1 second'
       GROUP BY symbol, (received_at AT TIME ZONE 'Asia/Shanghai')::date
     `, [scanFrom, scanTo]);
 
@@ -2206,6 +2205,9 @@ async function updateDailySummary() {
           params.push(r.symbol, r.trade_date, closePrice, r.high_price, r.low_price, r.total_volume);
           pi += 6;
         }
+        const totalVolumeExpr = isColdStart
+          ? 'EXCLUDED.total_volume'
+          : 'COALESCE(daily_summary.total_volume, 0) + EXCLUDED.total_volume';
         await client.query(`
           INSERT INTO market_data.daily_summary
             (symbol, trade_date, open_price, close_price, high_price, low_price, total_volume)
@@ -2214,7 +2216,7 @@ async function updateDailySummary() {
             close_price  = COALESCE(EXCLUDED.close_price, daily_summary.close_price),
             high_price   = GREATEST(daily_summary.high_price,  EXCLUDED.high_price),
             low_price    = LEAST(daily_summary.low_price,       EXCLUDED.low_price),
-            total_volume = EXCLUDED.total_volume
+            total_volume = ${totalVolumeExpr}
         `, params);
       }
     }
@@ -2239,8 +2241,6 @@ async function updateDailySummary() {
           WHERE received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
             AND price IS NOT NULL AND price::numeric > 0
             AND market_time IS NOT NULL AND market_time != ''
-            AND trim(trade_time)::time
-                  <= (received_at AT TIME ZONE 'Asia/Shanghai')::time + interval '1 second'
           ORDER BY symbol, received_at ASC, id ASC
         ) sub
         WHERE ds.symbol     = sub.symbol
