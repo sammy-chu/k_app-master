@@ -45,6 +45,14 @@
             background-color: #2a2a2a; padding: 10px; border-radius: 4px;
             margin-right: 15px; flex-wrap: wrap;
         }
+        .filters.collapsed { display: none; }
+        .btn-toggle-filters {
+            background: #2a2a2a; border: 1px solid #555; color: #aaa;
+            padding: 4px 10px; border-radius: 4px; font-size: 13px;
+            cursor: pointer; white-space: nowrap; transition: all 0.2s;
+            margin-right: 8px;
+        }
+        .btn-toggle-filters:hover { border-color: #888; color: #ddd; }
         .filter-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #aaa; }
         .filter-input {
             background-color: #1a1a1a; border: 1px solid #444; color: #ddd;
@@ -105,6 +113,7 @@
     <div class="header-bar">
         <h1 class="title">今日涨跌排名</h1>
         <div class="controls">
+            <button class="btn-toggle-filters" id="btn-toggle-filters" onclick="toggleFilters()">▾ 筛选</button>
             <div class="filters">
                 <div class="filter-item">
                     <label>最小成交量</label>
@@ -572,6 +581,13 @@
 
     function resetTimer()         { countdown = 3; updateTimerDisplay(); }
     function updateTimerDisplay() { document.getElementById('refresh-timer').textContent = `${countdown}s 后刷新`; }
+
+    function toggleFilters() {
+        const filters = document.querySelector('.filters');
+        const btn     = document.getElementById('btn-toggle-filters');
+        const collapsed = filters.classList.toggle('collapsed');
+        btn.textContent = collapsed ? '▸ 筛选' : '▾ 筛选';
+    }
 
     fetchData();
     setInterval(() => { countdown-- <= 0 ? fetchData() : updateTimerDisplay(); }, 1000);

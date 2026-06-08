@@ -60,6 +60,20 @@
             margin-bottom: 14px;
             flex-wrap: wrap;
         }
+        .filter-bar.collapsed { display: none; }
+        .filter-bar-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 14px;
+            gap: 10px;
+        }
+        .btn-toggle-filters {
+            background: #2a2a2a; border: 1px solid #555; color: #aaa;
+            padding: 4px 10px; border-radius: 4px; font-size: 13px;
+            cursor: pointer; white-space: nowrap; transition: all 0.2s;
+        }
+        .btn-toggle-filters:hover { border-color: #888; color: #ddd; }
+        .filter-summary { font-size: 12px; color: #555; }
         .filter-group { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #aaa; }
         .filter-group select, .filter-group input {
             background: #1a1a1a;
@@ -405,6 +419,10 @@
         </div>
     </div>
 
+    <div class="filter-bar-header">
+        <button class="btn-toggle-filters" id="btn-toggle-filters" onclick="toggleFilters()">▾ 筛选</button>
+        <span class="filter-summary" id="filter-summary"></span>
+    </div>
     <div class="filter-bar">
         <div class="filter-group">
             <label>方向</label>
@@ -1093,6 +1111,13 @@
     });
 
     saveBlocked();
+
+    function toggleFilters() {
+        const bar  = document.querySelector('.filter-bar');
+        const btn  = document.getElementById('btn-toggle-filters');
+        const collapsed = bar.classList.toggle('collapsed');
+        btn.textContent = collapsed ? '▸ 筛选' : '▾ 筛选';
+    }
 
     fetchRankingData().then(() => fetchData());
 

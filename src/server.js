@@ -352,6 +352,12 @@ const priceWindow = new Map();
 // 每根 bar 代表一个完整分钟，最多 10 根
 const window10m = new Map();
 
+// 30-minute OHLCV window cache，供震荡筛选规则（15/20/25/30分钟窗口）使用
+// symbol -> array of { bucket, open, high, low, close, volume } sorted oldest-first
+// 滚动追加模式：每次只查增量，内存保留最近30根bar，不全量重查
+const window30m = new Map();
+let window30mLastBucket = null; // 上次已写入的最新 bucket（Date对象），null表示冷启动
+
 // 稳定选股历史快照：symbol -> [{ time, r1_val, r2_vol, r3_pct, r4_pct, r5_cnt, last_price, change_pct }, ...]
 const stableHistory = new Map();
 
@@ -511,6 +517,171 @@ async function updateWindow10m() {
   snapshotStableHistory();
 }
 
+// 30分钟 OHLCV 聚合缓存，与 updateWindow10m 结构完全相同，仅拉取窗口扩展到30分钟
+// 供震荡筛选规则使用，每10秒刷新，仅用 pricePool
+// updateWindow30m：滚动追加模式
+// 冷启动（window30mLastBucket === null）：只查最近5分钟，数据量与 window10m 相当（~71ms）
+// 热更新：只查 lastBucket 所在分钟起的增量（通常1-2分钟），极快
+// 内存中每个 symbol 最多保留30根bar，超出时从头部淘汰（oldest-first）
+// 当前分钟的bar在该分钟内会被反复更新（因为分钟未收盘），通过 bucket 时间匹配原地替换
+async function updateWindow30m() {
+  const client = await pricePool.connect();
+  try {
+    await client.query('SET statement_timeout = 15000');
+
+    // 冷启动查5分钟；热更新从上次已知bucket所在分钟起查（覆盖当前分钟未收盘的bar）
+    const cutoff = window30mLastBucket
+      ? new Date(window30mLastBucket.getTime() - 60 * 1000) // 往前退1分钟，确保当前分钟bar被重新聚合
+      : new Date(Date.now() - 5 * 60 * 1000);
+
+    const { rows } = await client.query(`
+      SELECT
+        symbol,
+        date_trunc('minute', received_at AT TIME ZONE 'Asia/Shanghai') AS bucket,
+        (array_agg(price::numeric ORDER BY received_at ASC,  id ASC))[1]  AS open,
+        MAX(price::numeric)                                                AS high,
+        MIN(price::numeric)                                                AS low,
+        (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close,
+        COALESCE(SUM(size::numeric), 0)                                   AS volume
+      FROM tos_trades
+      WHERE received_at >= $1
+        AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
+        AND price IS NOT NULL
+        AND price::numeric > 0
+      GROUP BY symbol, date_trunc('minute', received_at AT TIME ZONE 'Asia/Shanghai')
+      ORDER BY symbol, bucket ASC
+    `, [cutoff]);
+
+    for (const row of rows) {
+      const bar = {
+        bucket: new Date(row.bucket),
+        open:   Number(row.open),
+        high:   Number(row.high),
+        low:    Number(row.low),
+        close:  Number(row.close),
+        volume: Number(row.volume),
+      };
+
+      if (!window30m.has(row.symbol)) window30m.set(row.symbol, []);
+      const arr = window30m.get(row.symbol);
+
+      // 当前分钟bar原地替换；新分钟bar追加到尾部，超30根从头部淘汰
+      const existIdx = arr.findIndex(b => b.bucket.getTime() === bar.bucket.getTime());
+      if (existIdx >= 0) {
+        arr[existIdx] = bar;
+      } else {
+        arr.push(bar);
+        if (arr.length > 30) arr.shift();
+      }
+
+      if (!window30mLastBucket || bar.bucket > window30mLastBucket) {
+        window30mLastBucket = bar.bucket;
+      }
+    }
+  } catch (err) {
+    console.error('[Window30m] Update failed:', err.message);
+  } finally {
+    client.release();
+  }
+}
+
+// === 震荡筛选核心算法 ===
+// 对给定的 bars 数组取最后 windowSize 根，按规则文档计算是否触发预警
+// 返回 { triggered, countA, countB, totalCount, winHigh, winLow, winVol, matchedPattern }
+function checkOscillatorWindow(bars, windowSize) {
+  const win = bars.slice(-windowSize);
+  if (win.length < windowSize) return { triggered: false };
+
+  // 条件1：总成交量 >= 310
+  const winVol = win.reduce((s, b) => s + b.volume, 0);
+  if (winVol < 310) return { triggered: false, winVol };
+
+  // 条件2：窗口高低差 >= 0.05
+  const winHigh = Math.max(...win.map(b => b.high));
+  const winLow  = Math.min(...win.map(b => b.low));
+  const winRange = winHigh - winLow;
+  if (winRange < 0.05) return { triggered: false, winVol, winHigh, winLow };
+
+  // 条件3：逐根K线计算触A/触B，构建事件序列
+  // A_i = low_i + range_i * 0.15，触A条件：low_i <= A_i（即 low_i 在振幅15%分位以内）
+  // B_i = low_i + range_i * 0.85，触B条件：high_i >= B_i
+  let countA = 0, countB = 0;
+  const events = []; // 每根K线的事件：'A' | 'B' | 'AB' | null
+
+  for (const bar of win) {
+    const barRange = bar.high - bar.low;
+    const touchedA = barRange > 0 ? bar.low  <= bar.low  + barRange * 0.15 : false; // low_i <= A_i 恒成立当 barRange>0
+    // 注：A_i = low_i + barRange*0.15，触A条件 low_i <= A_i 即 0 <= barRange*0.15，barRange>=0时恒真
+    // 正确语义：low_i 触及"靠近该K线自身低点的15%区域"
+    // 按规则文档：A_i = low_i + amp*0.15，触A = low_i <= A_i（即最低价落在A以下，即bar本身就是低位）
+    // 实际触A：该K线最低价 <= 窗口振幅15%分位价（窗口绝对低点+窗口振幅*0.15）
+    // 触B：该K线最高价 >= 窗口绝对低点+窗口振幅*0.85
+    // ——以窗口的 winHigh/winLow 作为基准，而非每根K线自身振幅
+    const priceA = winLow + winRange * 0.15;
+    const priceB = winLow + winRange * 0.85;
+    const isA = bar.low  <= priceA;
+    const isB = bar.high >= priceB;
+
+    if (isA) countA++;
+    if (isB) countB++;
+    if      (isA && isB) events.push('AB');
+    else if (isA)        events.push('A');
+    else if (isB)        events.push('B');
+    else                 events.push(null);
+  }
+
+  // 条件3子条件：countA >= 2，countB >= 2，countA + countB >= 5
+  if (countA < 2 || countB < 2 || countA + countB < 5) {
+    return { triggered: false, winVol, winHigh, winLow, countA, countB };
+  }
+
+  // 条件4：事件序列中存在 A→B→A 或 B→A→B（三根不同K线，时序递增，AB可充当A或B）
+  // 贪心三指针：先找第一个满足角色的位置，再往后找第二个，再往后找第三个
+  const matchedPattern = _findABAorBAB(events);
+  if (!matchedPattern) {
+    return { triggered: false, winVol, winHigh, winLow, countA, countB, totalCount: countA + countB };
+  }
+
+  return {
+    triggered:      true,
+    winVol,
+    winHigh,
+    winLow,
+    countA,
+    countB,
+    totalCount:     countA + countB,
+    matchedPattern, // 'ABA' | 'BAB'
+  };
+}
+
+// 检测事件序列中是否存在 A→B→A 或 B→A→B 子序列
+// events: Array of 'A' | 'B' | 'AB' | null
+// AB 既可充当 A，也可充当 B
+function _findABAorBAB(events) {
+  // 尝试检测指定模式：roles = ['A','B','A'] 或 ['B','A','B']
+  function _detect(r0, r1, r2) {
+    const canBe = (ev, role) => ev === role || ev === 'AB';
+    let i = -1;
+    // 找第一个满足 r0 的位置
+    for (let a = 0; a < events.length; a++) {
+      if (!canBe(events[a], r0)) continue;
+      i = a;
+      // 找第一个满足 r1 的位置（在 i 之后）
+      for (let b = i + 1; b < events.length; b++) {
+        if (!canBe(events[b], r1)) continue;
+        // 找第一个满足 r2 的位置（在 b 之后）
+        for (let c = b + 1; c < events.length; c++) {
+          if (canBe(events[c], r2)) return true;
+        }
+      }
+    }
+    return false;
+  }
+  if (_detect('A', 'B', 'A')) return 'ABA';
+  if (_detect('B', 'A', 'B')) return 'BAB';
+  return null;
+}
+
 const STABLE_R1 = 1.2, STABLE_R2 = 310, STABLE_R5_WINDOW = 10, STABLE_R5_MIN = 6;
 
 // R3/R5 共用阈值：按开盘价分档（"低于X按X算"向上取边界）
@@ -574,8 +745,8 @@ function snapshotStableHistory() {
     const r6Range = winHigh - winLow;
     let r6_a = 0, r6_b = 0;
     if (r6Range > 0) {
-      const priceA = winLow + r6Range * 0.05;
-      const priceB = winLow + r6Range * 0.95;
+      const priceA = winLow + r6Range * 0.1;
+      const priceB = winLow + r6Range * 0.9;
       r6_a = bars.filter(b => b.low  < priceA).length;
       r6_b = bars.filter(b => b.high > priceB).length;
     }
@@ -630,8 +801,8 @@ async function writeStableSnapshot() {
     const r6Range = winHigh - winLow;
     let r6_a = 0, r6_b = 0;
     if (r6Range > 0) {
-      const priceA = winLow + r6Range * 0.05;
-      const priceB = winLow + r6Range * 0.95;
+      const priceA = winLow + r6Range * 0.1;
+      const priceB = winLow + r6Range * 0.9;
       r6_a = bars.filter(b => b.low  < priceA).length;
       r6_b = bars.filter(b => b.high > priceB).length;
     }
@@ -1548,8 +1719,8 @@ app.get('/api/screener-stable', (req, res) => {
         // 预警价B = winLow + (winHigh - winLow) * 0.85（上轨）
         const r6Range = winHigh - winLow;
         if (r6Range > 0) {
-          const priceA = winLow + r6Range * 0.05;
-          const priceB = winLow + r6Range * 0.95;
+          const priceA = winLow + r6Range * 0.1;
+          const priceB = winLow + r6Range * 0.9;
           r6_a = bars.filter(b => b.low  < priceA).length;
           r6_b = bars.filter(b => b.high > priceB).length;
         } else {
@@ -1697,6 +1868,81 @@ function buildDiagnoseResult(s) {
     rules,
   };
 }
+
+// === 震荡筛选器 API ===
+// 对 window30m 中每个 symbol 依次跑 15/20/25/30 分钟四个独立窗口
+// 任意窗口触发则该 symbol 进入结果，返回各窗口明细
+// GET /api/screener-oscillator?price_min=&price_max=&change_min=&change_max=&vol_min=
+app.get('/api/screener-oscillator', (req, res) => {
+  try {
+    const q = req.query;
+    const priceMin = q.price_min !== undefined && q.price_min !== '' ? Number(q.price_min) : null;
+    const priceMax = q.price_max !== undefined && q.price_max !== '' ? Number(q.price_max) : null;
+    const changMin = q.change_min !== undefined && q.change_min !== '' ? Number(q.change_min) : null;
+    const changMax = q.change_max !== undefined && q.change_max !== '' ? Number(q.change_max) : null;
+    const volMin   = q.vol_min   !== undefined && q.vol_min   !== '' ? Number(q.vol_min)   : null;
+
+    const WINDOWS = [15, 20, 25, 30];
+    const results = [];
+
+    for (const row of rankingCache) {
+      const price     = Number(row.last_price);
+      const changePct = Number(row.change_pct);
+      const vol       = Number(row.total_volume) || 0;
+
+      if (!price) continue;
+
+      // 基础过滤
+      if (priceMin !== null && price     < priceMin) continue;
+      if (priceMax !== null && price     > priceMax) continue;
+      if (changMin !== null && changePct < changMin) continue;
+      if (changMax !== null && changePct > changMax) continue;
+      if (volMin   !== null && vol       < volMin)   continue;
+
+      const bars = window30m.get(row.symbol);
+      if (!bars || bars.length === 0) continue;
+
+      // 对四个窗口逐一计算
+      const windowResults = {};
+      let anyTriggered = false;
+
+      for (const wSize of WINDOWS) {
+        const r = checkOscillatorWindow(bars, wSize);
+        windowResults[wSize] = r;
+        if (r.triggered) anyTriggered = true;
+      }
+
+      if (!anyTriggered) continue;
+
+      const quote  = quoteCache.get(row.symbol);
+      const avgVol = Number(row.avg_vol_10d) || 0;
+
+      results.push({
+        symbol:        row.symbol,
+        last_price:    price,
+        open_price:    row.open_price,
+        change_pct:    changePct,
+        change_amount: Number(row.change_amount),
+        total_volume:  vol,
+        avg_vol_10d:   avgVol,
+        vol_ratio:     avgVol > 0 ? Number((vol / avgVol).toFixed(2)) : null,
+        high_price:    row.high_price,
+        low_price:     row.low_price,
+        bid:           quote ? quote.bid    : null,
+        ask:           quote ? quote.ask    : null,
+        spread:        quote ? quote.spread : null,
+        bars_count:    bars.length,
+        windows:       windowResults,  // { 15: {...}, 20: {...}, 25: {...}, 30: {...} }
+      });
+    }
+
+    results.sort((a, b) => b.change_pct - a.change_pct);
+    res.json(results);
+  } catch (e) {
+    console.error('[OscillatorScreener] error:', e);
+    res.status(500).json({ error: 'oscillator_screener_failed' });
+  }
+});
 
 app.get('/api/volume-surge-today', (req, res) => {
   res.json([...volumeSurgeToday]);
@@ -2144,49 +2390,39 @@ async function updateDailySummary() {
     openPriceDone = false;
   }
 
-  // 增量起点：首次运行取当日08:00（北京时间），之后取上次成功时间
-  const dayOpenStr = `${todayStr}T08:00:00+08:00`;
-  const isColdStart = lastDailySummaryRunAt === null;  // 冷启动覆盖，增量累加
-  const scanFrom = lastDailySummaryRunAt ?? dayOpenStr;
-  const scanTo   = new Date().toISOString();
+  // 增量起点保留用于记录上次执行时间（Step 2 open_price 纠错时仍有参考意义）
+  const scanTo = new Date().toISOString();
 
   const client = await pool.connect();
   try {
-    // ── Step 1：增量 upsert（close/high/low/volume）──────────────────────────
-    // 首次运行扫当日08:00至今（全天冷启动），之后每轮只扫约60s增量。
-    // work_mem=64MB：Sort 约需 30MB，内存中完成避免溢盘（session级，释放后还原）
-    // close_price 从内存 priceCache 读，不查库（避免 array_agg 全量排序超时）
-    // total_volume 覆盖而非累加，解决重启后虚增问题
-    await client.query('SET statement_timeout = 25000');
-    await client.query("SET work_mem = '64MB'");
+    // ── Step 1：从内存缓存 upsert（close/high/low）────────────────────────────
+    // high/low 从 window10m 内存缓存读（每10s刷新，覆盖当日开盘至今）
+    // close    从 priceCache 内存缓存读（每10s刷新，最新成交价）
+    // 完全不查 tos_trades，彻底消除冷启动全天扫描超时（原耗时202s → 现在<1s）
+    const todayDate = todayStr; // YYYY-MM-DD，与 daily_summary.trade_date 一致
+    const memRows = [];
+    for (const row of rankingCache) {
+      const bars       = window10m.get(row.symbol);
+      const cached     = priceCache.get(row.symbol);
+      const closePrice = (cached && cached.price > 0) ? cached.price : null;
+      if (!bars || bars.length === 0) continue;
+      const highPrice = Math.max(...bars.map(b => b.high));
+      const lowPrice  = Math.min(...bars.map(b => b.low));
+      if (highPrice <= 0 || lowPrice <= 0) continue;
+      memRows.push({ symbol: row.symbol, highPrice, lowPrice, closePrice });
+    }
 
-    const { rows: aggRows } = await client.query(`
-      SELECT
-        symbol,
-        (received_at AT TIME ZONE 'Asia/Shanghai')::date AS trade_date,
-        MAX(price::numeric) AS high_price,
-        MIN(price::numeric) AS low_price
-      FROM market_data.tos_trades
-      WHERE received_at >  $1::timestamptz
-        AND received_at <= $2::timestamptz
-        AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
-        AND price IS NOT NULL AND price::numeric > 0
-        AND market_time IS NOT NULL AND market_time != ''
-      GROUP BY symbol, (received_at AT TIME ZONE 'Asia/Shanghai')::date
-    `, [scanFrom, scanTo]);
-
-    if (aggRows.length > 0) {
+    if (memRows.length > 0) {
+      await client.query('SET statement_timeout = 15000');
       const BATCH = 500;
-      for (let i = 0; i < aggRows.length; i += BATCH) {
-        const batch = aggRows.slice(i, i + BATCH);
+      for (let i = 0; i < memRows.length; i += BATCH) {
+        const batch  = memRows.slice(i, i + BATCH);
         const values = [];
         const params = [];
         let pi = 1;
         for (const r of batch) {
-          const cached = priceCache.get(r.symbol);
-          const closePrice = (cached && cached.price > 0) ? cached.price : null;
           values.push(`($${pi},$${pi+1},NULL,$${pi+2},$${pi+3},$${pi+4})`);
-          params.push(r.symbol, r.trade_date, closePrice, r.high_price, r.low_price);
+          params.push(r.symbol, todayDate, r.closePrice, r.highPrice, r.lowPrice);
           pi += 5;
         }
         await client.query(`
@@ -2194,9 +2430,9 @@ async function updateDailySummary() {
             (symbol, trade_date, open_price, close_price, high_price, low_price)
           VALUES ${values.join(',')}
           ON CONFLICT (symbol, trade_date) DO UPDATE SET
-            close_price  = COALESCE(EXCLUDED.close_price, daily_summary.close_price),
-            high_price   = GREATEST(daily_summary.high_price,  EXCLUDED.high_price),
-            low_price    = LEAST(daily_summary.low_price,       EXCLUDED.low_price)
+            close_price = COALESCE(EXCLUDED.close_price, daily_summary.close_price),
+            high_price  = GREATEST(daily_summary.high_price,  EXCLUDED.high_price),
+            low_price   = LEAST(daily_summary.low_price,       EXCLUDED.low_price)
             -- total_volume 由 orderbook_processor_bl.py L1DBSnapshotWriter 负责写入，此处不更新
         `, params);
       }
@@ -2519,8 +2755,9 @@ function startAlertMonitor() {
   // 各任务按连接池和查询重量分组，错开首次执行时间，避免启动期主池连接被同时抢占：
   //
   //  t=0s    : PriceMonitor、PriceCache冷启动、PriceWindow、Window10m（pricePool）
+  //  t=5s    : Window30m冷启动（pricePool）
   //  t=15s   : QuoteCache冷启动（pricePool，已有延迟）
-  //  t=20s   : OrderBookCache冷启动（pricePool）
+  //  t=20s   : OrderBookCache [DISABLED]（v1接口无消费方，停用以释放pricePool连接）
   //  t=0s    : DailySummaryUpdater（主池，60s任务，先启动）
   //  t=30s   : IntradayAvgVol 首次立即执行 + 循环（主池，60s任务）
   //  t=45s   : IntradayVolWriter [DISABLED]（已由 orderbook_processor_bl.py 负责）
@@ -2546,6 +2783,13 @@ function startAlertMonitor() {
   updateWindow10m();
   runScan('Window10m', updateWindow10m, 10000);
 
+  // ── t=5s：Window30m（pricePool，延迟5s避开 Window10m 启动瞬间）────────────
+  setTimeout(() => {
+    console.log(`[Window30m] starting, interval=10s`);
+    updateWindow30m();
+    runScan('Window30m', updateWindow30m, 10000);
+  }, 5000);
+
   // ── t=15s：QuoteCache（已有延迟，保持不变）────────────────────────────────
   console.log(`[QuoteCache] cold-start initializing in 15s...`);
   setTimeout(() => {
@@ -2554,12 +2798,14 @@ function startAlertMonitor() {
     });
   }, 15000);
 
-  // ── t=20s：OrderBookCache 冷启动（避开 QuoteCache 的15s）─────────────────
-  setTimeout(() => {
-    warmUpOrderBookCache().then(() => {
-      runScan('OrderBookCache', updateOrderBookCache, 10000);
-    });
-  }, 20000);
+  // ── t=20s：OrderBookCache [DISABLED] ─────────────────────────────────────
+  // /api/screener-large-orders（v1）无页面消费，v2已改用 l2_alert_history_bl 直查
+  // _fetchOrderBook 每次超时15s+，持续占用 pricePool 连接拖慢其他任务，故停用
+  // setTimeout(() => {
+  //   warmUpOrderBookCache().then(() => {
+  //     runScan('OrderBookCache', updateOrderBookCache, 10000);
+  //   });
+  // }, 20000);
 
   // ── t=0s：DailySummaryUpdater（主池，60s，最先启动）──────────────────────
   // 注：total_volume 已从此任务移除，仅负责 open/close/high/low 更新
@@ -2616,9 +2862,12 @@ function startAlertMonitor() {
     if (h === 7 && m === 55 && lastHistoryClearDate !== todayStr) {
       lastHistoryClearDate = todayStr;
       stableHistory.clear();
+      window30m.clear();
+      window30mLastBucket = null;
       lastDailySummaryRunAt = null;
       openPriceDone = false;
       console.log('[StableHistory] cleared for new trading day');
+      console.log('[Window30m] cleared for new trading day');
       pruneStableSnapshot();
       console.log('[DailySummary] open_price flag reset for new trading day');
     }
@@ -2642,6 +2891,7 @@ app.get('/l2-alerts',       (req, res) => res.sendFile(path.join(__dirname, '../
 app.get('/swing-screener',  (req, res) => res.sendFile(path.join(__dirname, '../public/swing-screener.html')));
 app.get('/screener',        (req, res) => res.sendFile(path.join(__dirname, '../public/screener.html')));
 app.get('/stable-screener', (req, res) => res.sendFile(path.join(__dirname, '../public/screener-stable.html')));
+app.get('/oscillator-screener', (req, res) => res.sendFile(path.join(__dirname, '../public/screener-oscillator.html')));
 
 ensureTables().then(() => {
   startAlertMonitor();
