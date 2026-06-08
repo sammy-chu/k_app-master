@@ -574,8 +574,8 @@ function snapshotStableHistory() {
     const r6Range = winHigh - winLow;
     let r6_a = 0, r6_b = 0;
     if (r6Range > 0) {
-      const priceA = winLow + r6Range * 0.15;
-      const priceB = winLow + r6Range * 0.85;
+      const priceA = winLow + r6Range * 0.05;
+      const priceB = winLow + r6Range * 0.95;
       r6_a = bars.filter(b => b.low  < priceA).length;
       r6_b = bars.filter(b => b.high > priceB).length;
     }
@@ -630,8 +630,8 @@ async function writeStableSnapshot() {
     const r6Range = winHigh - winLow;
     let r6_a = 0, r6_b = 0;
     if (r6Range > 0) {
-      const priceA = winLow + r6Range * 0.15;
-      const priceB = winLow + r6Range * 0.85;
+      const priceA = winLow + r6Range * 0.05;
+      const priceB = winLow + r6Range * 0.95;
       r6_a = bars.filter(b => b.low  < priceA).length;
       r6_b = bars.filter(b => b.high > priceB).length;
     }
@@ -1067,6 +1067,7 @@ async function refreshIntradayAvgVolCache() {
 
 // === 当日分时成交量写入 daily_intraday_vol ===
 // period_vol 存当天从开盘到该分钟的累计成交量（单调递增）
+// 数据来源已改为 daily_summary.total_volume（PPro8 L1DB 全量，由 orderbook_processor_bl.py 写入）
 
 // 每分钟写入当前分钟的累计量
 async function writeIntradayVolMinute() {
@@ -1078,26 +1079,25 @@ async function writeIntradayVolMinute() {
   const client = await pricePool.connect();
   try {
     await client.query('SET statement_timeout = 15000');
-    // 每次写入：从开盘到当前分钟截断时刻的全天累计量
-    await client.query(`
+    // 直接从 daily_summary.total_volume 取当前全量累计值，写入当前分钟快照
+    // total_volume 由 L1DBSnapshotWriter 实时更新，天然就是从开盘到当前的累计量
+    const { rowCount } = await client.query(`
       INSERT INTO market_data.daily_intraday_vol (symbol, trade_date, minute_time, period_vol)
       SELECT
         symbol,
-        (received_at AT TIME ZONE 'Asia/Shanghai')::date                     AS trade_date,
-        date_trunc('minute', NOW() AT TIME ZONE 'Asia/Shanghai')::time       AS minute_time,
-        SUM(size::numeric)                                                    AS period_vol
-      FROM tos_trades
-      WHERE received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
-        AND received_at <  date_trunc('minute', NOW() AT TIME ZONE 'Asia/Shanghai')
-                           AT TIME ZONE 'Asia/Shanghai'
-        AND size IS NOT NULL AND size::numeric > 0
-        AND market_time IS NOT NULL AND market_time != ''
-        AND trim(trade_time)::time <= (received_at AT TIME ZONE 'Asia/Shanghai')::time + INTERVAL '1 second'
-      GROUP BY symbol,
-               (received_at AT TIME ZONE 'Asia/Shanghai')::date
+        trade_date,
+        date_trunc('minute', NOW() AT TIME ZONE 'Asia/Shanghai')::time AS minute_time,
+        total_volume                                                    AS period_vol
+      FROM market_data.daily_summary
+      WHERE trade_date = current_date
+        AND total_volume IS NOT NULL
+        AND total_volume > 0
       ON CONFLICT (symbol, trade_date, minute_time)
       DO UPDATE SET period_vol = EXCLUDED.period_vol
     `);
+    if (rowCount > 0) {
+      console.log(`[IntradayVolWriter] Wrote ${rowCount} rows from daily_summary`);
+    }
   } catch (err) {
     console.error('[IntradayVolWriter] Minute write failed:', err.message);
   } finally {
@@ -1106,43 +1106,28 @@ async function writeIntradayVolMinute() {
   }
 }
 
-// 收盘后全量补写当天每分钟的累计量快照
+// 收盘后补写当天收盘时刻的终值快照
+// 改为从 daily_summary.total_volume 取收盘终量（PPro8 L1DB 全量），写入 17:00 分钟档
+// 注：daily_summary 只存最新全量值，无法还原历史每分钟增量，故只补写收盘终值这一条
 async function snapshotTodayAllMinutes() {
   const client = await pool.connect();
   try {
-    await client.query('SET statement_timeout = 60000');
-    // 先按分钟聚合出每分钟增量，再用窗口函数累计
+    await client.query('SET statement_timeout = 30000');
     const { rowCount } = await client.query(`
       INSERT INTO market_data.daily_intraday_vol (symbol, trade_date, minute_time, period_vol)
       SELECT
         symbol,
         trade_date,
-        minute_time,
-        SUM(minute_vol) OVER (
-          PARTITION BY symbol, trade_date
-          ORDER BY minute_time
-          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-        ) AS period_vol
-      FROM (
-        SELECT
-          symbol,
-          (received_at AT TIME ZONE 'Asia/Shanghai')::date                     AS trade_date,
-          date_trunc('minute', received_at AT TIME ZONE 'Asia/Shanghai')::time AS minute_time,
-          SUM(size::numeric)                                                    AS minute_vol
-        FROM tos_trades
-        WHERE received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
-          AND received_at <  current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '17 hours'
-          AND size IS NOT NULL AND size::numeric > 0
-          AND market_time IS NOT NULL AND market_time != ''
-          AND trim(trade_time)::time <= (received_at AT TIME ZONE 'Asia/Shanghai')::time + INTERVAL '1 second'
-        GROUP BY symbol,
-                 (received_at AT TIME ZONE 'Asia/Shanghai')::date,
-                 date_trunc('minute', received_at AT TIME ZONE 'Asia/Shanghai')::time
-      ) minute_agg
+        '17:00:00'::time AS minute_time,
+        total_volume     AS period_vol
+      FROM market_data.daily_summary
+      WHERE trade_date = current_date
+        AND total_volume IS NOT NULL
+        AND total_volume > 0
       ON CONFLICT (symbol, trade_date, minute_time)
       DO UPDATE SET period_vol = EXCLUDED.period_vol
     `);
-    console.log(`[IntradaySnapshot] Today's snapshot done, ${rowCount} rows upserted`);
+    console.log(`[IntradaySnapshot] Closing snapshot done, ${rowCount} rows upserted`);
   } catch (err) {
     console.error('[IntradaySnapshot] Snapshot failed:', err.message);
   } finally {
@@ -1563,8 +1548,8 @@ app.get('/api/screener-stable', (req, res) => {
         // 预警价B = winLow + (winHigh - winLow) * 0.85（上轨）
         const r6Range = winHigh - winLow;
         if (r6Range > 0) {
-          const priceA = winLow + r6Range * 0.15;
-          const priceB = winLow + r6Range * 0.85;
+          const priceA = winLow + r6Range * 0.05;
+          const priceB = winLow + r6Range * 0.95;
           r6_a = bars.filter(b => b.low  < priceA).length;
           r6_b = bars.filter(b => b.high > priceB).length;
         } else {
@@ -2180,8 +2165,7 @@ async function updateDailySummary() {
         symbol,
         (received_at AT TIME ZONE 'Asia/Shanghai')::date AS trade_date,
         MAX(price::numeric) AS high_price,
-        MIN(price::numeric) AS low_price,
-        SUM(size::numeric)  AS total_volume
+        MIN(price::numeric) AS low_price
       FROM market_data.tos_trades
       WHERE received_at >  $1::timestamptz
         AND received_at <= $2::timestamptz
@@ -2201,22 +2185,19 @@ async function updateDailySummary() {
         for (const r of batch) {
           const cached = priceCache.get(r.symbol);
           const closePrice = (cached && cached.price > 0) ? cached.price : null;
-          values.push(`($${pi},$${pi+1},NULL,$${pi+2},$${pi+3},$${pi+4},$${pi+5})`);
-          params.push(r.symbol, r.trade_date, closePrice, r.high_price, r.low_price, r.total_volume);
-          pi += 6;
+          values.push(`($${pi},$${pi+1},NULL,$${pi+2},$${pi+3},$${pi+4})`);
+          params.push(r.symbol, r.trade_date, closePrice, r.high_price, r.low_price);
+          pi += 5;
         }
-        const totalVolumeExpr = isColdStart
-          ? 'EXCLUDED.total_volume'
-          : 'COALESCE(daily_summary.total_volume, 0) + EXCLUDED.total_volume';
         await client.query(`
           INSERT INTO market_data.daily_summary
-            (symbol, trade_date, open_price, close_price, high_price, low_price, total_volume)
+            (symbol, trade_date, open_price, close_price, high_price, low_price)
           VALUES ${values.join(',')}
           ON CONFLICT (symbol, trade_date) DO UPDATE SET
             close_price  = COALESCE(EXCLUDED.close_price, daily_summary.close_price),
             high_price   = GREATEST(daily_summary.high_price,  EXCLUDED.high_price),
-            low_price    = LEAST(daily_summary.low_price,       EXCLUDED.low_price),
-            total_volume = ${totalVolumeExpr}
+            low_price    = LEAST(daily_summary.low_price,       EXCLUDED.low_price)
+            -- total_volume 由 orderbook_processor_bl.py L1DBSnapshotWriter 负责写入，此处不更新
         `, params);
       }
     }
@@ -2542,7 +2523,7 @@ function startAlertMonitor() {
   //  t=20s   : OrderBookCache冷启动（pricePool）
   //  t=0s    : DailySummaryUpdater（主池，60s任务，先启动）
   //  t=30s   : IntradayAvgVol 首次立即执行 + 循环（主池，60s任务）
-  //  t=45s   : IntradayVolWriter（主池，60s任务，最后启动）
+  //  t=45s   : IntradayVolWriter [DISABLED]（已由 orderbook_processor_bl.py 负责）
   //  t=0s    : VolumeMonitor（主池，300s任务）
   //  t=60s   : HillMonitor（主池，300s任务，延迟1分钟）
   //  t=120s  : VolumeSurge（主池，300s任务，延迟2分钟）
@@ -2581,6 +2562,7 @@ function startAlertMonitor() {
   }, 20000);
 
   // ── t=0s：DailySummaryUpdater（主池，60s，最先启动）──────────────────────
+  // 注：total_volume 已从此任务移除，仅负责 open/close/high/low 更新
   console.log(`[DailySummaryUpdater] starting, interval=60s`);
   runScan('DailySummaryUpdater', updateDailySummary, 60000);
 
@@ -2591,11 +2573,12 @@ function startAlertMonitor() {
     runScan('IntradayAvgVol', refreshIntradayAvgVolCache, 60000);
   }, 30000);
 
-  // ── t=45s：IntradayVolWriter（主池，60s，延迟45s错开其他写入任务）────────
-  setTimeout(() => {
-    console.log(`[IntradayVolWriter] starting, interval=60s`);
-    runScan('IntradayVolWriter', writeIntradayVolMinute, 60000);
-  }, 45000);
+  // ── t=45s：IntradayVolWriter [DISABLED] ────────────────────────────────
+  // daily_intraday_vol 已改由 orderbook_processor_bl.py IntradayVolWriter 负责写入
+  // setTimeout(() => {
+  //   console.log(`[IntradayVolWriter] starting, interval=60s`);
+  //   runScan('IntradayVolWriter', writeIntradayVolMinute, 60000);
+  // }, 45000);
 
   // ── t=55s：StableSnapshot（主池，60s，在 Window10m 刷新后写入）────────────
   setTimeout(() => {
@@ -2621,19 +2604,15 @@ function startAlertMonitor() {
     runScan('VolumeSurge', scanIntradayVolumeSurge, SURGE_SCAN_INTERVAL);
   }, 120000);
 
-  // 每天 17:01 北京时间触发收盘快照，补全当日所有分钟到 daily_intraday_vol
-  let lastSnapshotDate = null;
+  // 每天定时任务调度器（60s 心跳）
+  // [DISABLED] 17:01 收盘快照 snapshotTodayAllMinutes —— 已由 orderbook_processor_bl.py 负责
+  // [保留]     07:55 新交易日重置（stableHistory、DailySummary open_price flag）
   let lastHistoryClearDate = null;
-  console.log(`[IntradaySnapshot] scheduler starting, will trigger at 17:01 Asia/Shanghai daily`);
   setInterval(() => {
     const bj = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
     const h  = bj.getHours();
     const m  = bj.getMinutes();
     const todayStr = bj.toISOString().slice(0, 10);
-    if (h === 17 && m === 1 && lastSnapshotDate !== todayStr) {
-      lastSnapshotDate = todayStr;
-      snapshotTodayAllMinutes();
-    }
     if (h === 7 && m === 55 && lastHistoryClearDate !== todayStr) {
       lastHistoryClearDate = todayStr;
       stableHistory.clear();
