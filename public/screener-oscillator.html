@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>震荡筛选器</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #1a1a1a;
+    color: #ddd;
+    padding: 20px;
+    line-height: 1.6;
+  }
+  .container { max-width: 1600px; margin: 0 auto; }
+
+  /* ── 导航 ── */
+  .nav-links { text-align: center; margin-bottom: 20px; }
+  .nav-links a {
+    color: #007acc; text-decoration: none; padding: 6px 14px; margin: 0 6px;
+    border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;
+    display: inline-block; font-size: 13px;
+  }
+  .nav-links a:hover { background-color: #007acc; color: white; }
+  .nav-links a.active { background-color: #007acc; color: white; }
+
+  /* ── 标题栏 ── */
+  .header-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 16px; border-bottom: 1px solid #333; padding-bottom: 12px;
+  }
+  .title { font-size: 1.4em; color: #ddd; font-weight: normal; }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+  .refresh-info { font-size: 12px; color: #888; white-space: nowrap; }
+  .status-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: #555; margin-right: 6px; vertical-align: middle;
+    transition: background 0.3s;
+  }
+  .status-dot.live  { background: #26a69a; box-shadow: 0 0 5px #26a69a; }
+  .status-dot.error { background: #ef5350; }
+
+  /* ── 筛选面板 ── */
+  .filter-panel-wrap { margin-bottom: 14px; }
+  .filter-toggle-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 14px; background: #2a2a2a; border-radius: 6px;
+    cursor: pointer; user-select: none;
+    border: 1px solid #333; transition: border-color 0.15s;
+  }
+  .filter-toggle-bar:hover { border-color: #444; }
+  .filter-toggle-left { display: flex; align-items: center; gap: 10px; }
+  .filter-toggle-label { font-size: 12px; color: #666; }
+  .filter-active-pills { display: flex; gap: 5px; flex-wrap: wrap; }
+  .filter-pill {
+    font-size: 11px; padding: 1px 8px; border-radius: 10px;
+    background: #007acc1a; border: 1px solid #007acc44; color: #7ac0f0;
+  }
+  .filter-chevron { font-size: 10px; color: #555; transition: transform 0.2s ease; }
+  .filter-chevron.open { transform: rotate(180deg); }
+  .filter-body {
+    overflow: hidden; max-height: 0; opacity: 0;
+    transition: max-height 0.25s ease, opacity 0.2s ease;
+  }
+  .filter-body.open { max-height: 160px; opacity: 1; }
+  .filter-panel {
+    background: #2a2a2a; padding: 12px 16px 14px;
+    border-radius: 0 0 6px 6px; border-top: 1px solid #333;
+    display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: flex-end;
+  }
+  .filter-group { display: flex; flex-direction: column; gap: 4px; }
+  .filter-group label { font-size: 12px; color: #888; }
+  .filter-row { display: flex; align-items: center; gap: 5px; }
+  .filter-sep { font-size: 12px; color: #555; }
+
+  input[type=number], input[type=text] {
+    background: #1a1a1a; border: 1px solid #444; color: #ddd;
+    padding: 5px 8px; border-radius: 4px; font-size: 13px;
+    outline: none; transition: border-color 0.15s;
+  }
+  input[type=number] { width: 80px; -moz-appearance: textfield; }
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+  input[type=number]:focus, input[type=text]:focus { border-color: #007acc; }
+  input[type=number]::placeholder,
+  input[type=text]::placeholder { color: #555; }
+  input[type=number].has-value { border-color: #007acc55; color: #7ac0f0; }
+
+  .filter-actions { display: flex; align-items: flex-end; gap: 8px; margin-left: auto; }
+  .btn {
+    padding: 6px 16px; border-radius: 4px; border: 1px solid #444;
+    background: #1a1a1a; color: #ccc; font-size: 13px; cursor: pointer;
+    transition: all 0.15s; white-space: nowrap;
+  }
+  .btn:hover { border-color: #888; color: #fff; }
+  .btn.primary { border-color: #007acc; color: #7ac0f0; background: #007acc18; }
+  .btn.primary:hover { background: #007acc30; }
+
+  /* ── 代码查询框 ── */
+  .lookup-panel {
+    background: #222; border: 1px solid #333; border-radius: 6px;
+    margin-bottom: 14px; padding: 12px 16px;
+  }
+  .lookup-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .lookup-row label { font-size: 12px; color: #888; white-space: nowrap; }
+  #symbolInput { width: 130px; font-size: 14px; font-weight: bold; text-transform: uppercase; }
+  .lookup-result {
+    margin-top: 10px; display: none;
+    background: #1a1a1a; border: 1px solid #333; border-radius: 4px;
+    padding: 12px 14px;
+  }
+  .lookup-result.show { display: block; }
+  .lookup-sym { font-size: 16px; font-weight: bold; color: #fff; margin-bottom: 10px; }
+  .lookup-sym span { font-size: 12px; font-weight: normal; margin-left: 10px; }
+
+  /* ── 窗口详情卡片 ── */
+  .win-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+  }
+  .win-card {
+    background: #252525; border-radius: 4px; padding: 10px 12px;
+    border-left: 3px solid #333;
+  }
+  .win-card.triggered { border-left-color: #26a69a; }
+  .win-card.not-triggered { border-left-color: #444; opacity: 0.55; }
+  .win-card-title {
+    font-size: 11px; color: #666; margin-bottom: 6px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .win-badge {
+    font-size: 10px; padding: 1px 6px; border-radius: 2px;
+    background: #26a69a18; border: 1px solid #26a69a44; color: #26a69a;
+  }
+  .win-badge.no { background: #33333318; border-color: #444; color: #555; }
+  .win-stats { display: flex; flex-direction: column; gap: 3px; }
+  .win-stat { font-size: 12px; color: #888; display: flex; justify-content: space-between; }
+  .win-stat span { color: #bbb; }
+  .win-stat span.pass { color: #26a69a; }
+  .win-stat span.fail { color: #ef5350; }
+  .win-pattern {
+    margin-top: 6px; font-size: 11px;
+    padding: 2px 8px; border-radius: 3px; display: inline-block;
+    background: #26a69a18; border: 1px solid #26a69a33; color: #26a69a;
+  }
+  .win-pattern.no { background: transparent; border: none; color: #444; }
+
+  /* ── 状态栏 ── */
+  .status-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; color: #888; margin-bottom: 8px; padding: 0 2px;
+  }
+  .rule-summary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .rule-tag {
+    padding: 2px 8px; border-radius: 3px; font-size: 11px;
+    border: 1px solid #26a69a44; color: #26a69a; background: #26a69a0a;
+  }
+
+  /* ── 表格 ── */
+  table {
+    width: 100%; border-collapse: collapse;
+    background-color: #252525; border-radius: 8px; overflow: hidden;
+    font-size: 13px;
+  }
+  th, td { padding: 9px 12px; text-align: right; border-bottom: 1px solid #2e2e2e; }
+  th {
+    background-color: #333; color: #bbb; font-weight: 600;
+    font-size: 12px; cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  th:hover { color: #fff; }
+  th.sort-asc::after  { content: ' ↑'; color: #007acc; }
+  th.sort-desc::after { content: ' ↓'; color: #007acc; }
+  th:first-child, td:first-child { text-align: left; padding-left: 14px; }
+  tr:hover { background-color: #2a2a2a; }
+
+  .sym { font-weight: bold; color: #fff; font-size: 14px; cursor: pointer; }
+  .sym:hover { color: #7ac0f0; text-decoration: underline; }
+  .up   { color: #26a69a; }
+  .down { color: #ef5350; }
+  .flat { color: #888; }
+
+  /* ── 触发窗口徽标 ── */
+  .win-tags { display: flex; gap: 3px; justify-content: flex-end; flex-wrap: wrap; }
+  .win-tag {
+    font-size: 10px; padding: 1px 5px; border-radius: 2px;
+    background: #26a69a18; border: 1px solid #26a69a44; color: #26a69a;
+    white-space: nowrap;
+  }
+  .win-tag.aba { border-color: #26a69a66; }
+  .win-tag.bab { border-color: #ffd54f66; color: #ffd54f; background: #ffd54f18; }
+
+  /* vol bar */
+  .vol-cell { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+  .mini-bar { width: 32px; height: 3px; background: #333; border-radius: 2px; overflow: hidden; flex-shrink: 0; }
+  .mini-bar-fill { height: 100%; background: #007acc; border-radius: 2px; }
+
+  .empty-row td { text-align: center; padding: 60px; color: #555; }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid #333; border-top-color: #007acc;
+    border-radius: 50%; animation: spin 0.7s linear infinite;
+    vertical-align: middle; margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (max-width: 900px) {
+    .filter-panel { gap: 10px; }
+    .header-bar { flex-direction: column; align-items: flex-start; gap: 8px; }
+    .win-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- 导航 -->
+  <div class="nav-links">
+    <a href="/alerts">价格提醒</a>
+    <a href="/volume-alerts">放量提醒</a>
+    <a href="/hills">山丘形态</a>
+    <a href="/hill-alerts">山丘放量</a>
+    <a href="/ranking">涨跌排名</a>
+    <a href="/l2-alerts">L2大单</a>
+    <a href="/screener">选股器</a>
+    <a href="/swing-screener">波段扫描</a>
+    <a href="/stable-screener">稳定选股</a>
+    <a href="/oscillator-screener" class="active">震荡筛选</a>
+  </div>
+
+  <!-- 标题栏 -->
+  <div class="header-bar">
+    <h1 class="title">震荡筛选器
+      <span style="font-size:0.6em;color:#555;margin-left:8px;">15/20/25/30分钟窗口 · A-B-A 或 B-A-B 模式</span>
+    </h1>
+    <div class="header-right">
+      <span id="status-text" style="font-size:12px;color:#888;">
+        <span class="status-dot" id="status-dot"></span>初始化
+      </span>
+      <span class="refresh-info" id="refresh-timer">10s 后刷新</span>
+    </div>
+  </div>
+
+  <!-- 筛选面板 -->
+  <div class="filter-panel-wrap">
+    <div class="filter-toggle-bar" onclick="toggleFilter()">
+      <div class="filter-toggle-left">
+        <span class="filter-toggle-label">筛选条件</span>
+        <div class="filter-active-pills" id="filterPills"></div>
+      </div>
+      <span class="filter-chevron" id="filterChevron">▼</span>
+    </div>
+    <div class="filter-body" id="filterBody">
+      <div class="filter-panel">
+        <div class="filter-group">
+          <label>价格区间</label>
+          <div class="filter-row">
+            <input type="number" id="priceMin" placeholder="最低" step="1" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="priceMax" placeholder="最高" step="1" min="0">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label>涨跌幅绝对值 %</label>
+          <div class="filter-row">
+            <input type="number" id="changeMin" placeholder="最低" step="0.1" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="changeMax" placeholder="最高" step="0.1" min="0">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label>今日成交量</label>
+          <div class="filter-row">
+            <input type="number" id="volMin" placeholder="最低" step="1000" min="0">
+          </div>
+        </div>
+        <div class="filter-actions">
+          <button class="btn" onclick="clearFilters()">清空</button>
+          <button class="btn primary" onclick="applyFilter()">筛选</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 代码查询面板 -->
+  <div class="lookup-panel">
+    <div class="lookup-row">
+      <label>查询单只股票窗口详情</label>
+      <input type="text" id="symbolInput" placeholder="输入代码" maxlength="20"
+             oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter')handleLookup()">
+      <button class="btn" onclick="handleLookup()">查询</button>
+      <button class="btn" onclick="clearLookup()" style="color:#555;border-color:#333;">清除</button>
+    </div>
+    <div class="lookup-result" id="lookupResult"></div>
+  </div>
+
+  <!-- 状态栏 -->
+  <div class="status-bar">
+    <div class="rule-summary">
+      <span class="rule-tag">量 ≥ 310 股</span>
+      <span class="rule-tag">窗口高低差 ≥ 0.05</span>
+      <span class="rule-tag">触A ≥ 2 · 触B ≥ 2 · 合计 ≥ 5</span>
+      <span class="rule-tag">A→B→A 或 B→A→B</span>
+    </div>
+    <span id="count-info">—</span>
+  </div>
+
+  <!-- 主表格 -->
+  <table>
+    <thead>
+      <tr>
+        <th onclick="sortBy('symbol')">代码</th>
+        <th onclick="sortBy('last_price')">现价</th>
+        <th onclick="sortBy('change_pct')" class="sort-desc">涨跌%</th>
+        <th onclick="sortBy('change_amount')">涨跌额</th>
+        <th onclick="sortBy('total_volume')">今日量</th>
+        <th onclick="sortBy('vol_ratio')">量比</th>
+        <th onclick="sortBy('bars_count')">K线数</th>
+        <th onclick="sortBy('triggered_count')" title="触发的窗口数量">触发窗口</th>
+        <th title="各窗口触发情况，ABA/BAB为模式类型">窗口详情</th>
+      </tr>
+    </thead>
+    <tbody id="tbody">
+      <tr class="empty-row"><td colspan="9"><span class="spinner"></span>加载中...</td></tr>
+    </tbody>
+  </table>
+
+</div>
+
+<script>
+// ── STATE ─────────────────────────────────────────────────────────────────
+let allData    = [];
+let sortedData = [];
+let sortKey    = 'change_pct';
+let sortDir    = -1;
+let maxVol     = 1;
+let countdown  = 10;
+let isFetching = false;
+
+const WINDOWS = [15, 20, 25, 30];
+const SORT_KEYS = ['symbol','last_price','change_pct','change_amount','total_volume','vol_ratio','bars_count','triggered_count','_windows'];
+const FILTER_IDS = ['priceMin','priceMax','changeMin','changeMax','volMin'];
+
+// ── FILTER TOGGLE ─────────────────────────────────────────────────────────
+let filterOpen = false;
+function toggleFilter() {
+  filterOpen = !filterOpen;
+  document.getElementById('filterBody').classList.toggle('open', filterOpen);
+  document.getElementById('filterChevron').classList.toggle('open', filterOpen);
+}
+
+function getV(id) {
+  const v = document.getElementById(id)?.value.trim();
+  return (!v || v === '') ? null : Number(v);
+}
+
+function updateHighlights() {
+  FILTER_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('has-value', el.value.trim() !== '');
+  });
+  const pairs = [
+    ['priceMin','priceMax','价格'],
+    ['changeMin','changeMax','涨跌%'],
+    ['volMin',null,'今日量'],
+  ];
+  const pills = document.getElementById('filterPills');
+  if (!pills) return;
+  pills.innerHTML = pairs
+    .filter(([a, b]) => document.getElementById(a)?.value.trim() || (b && document.getElementById(b)?.value.trim()))
+    .map(([a, b, label]) => {
+      const va = document.getElementById(a)?.value.trim();
+      const vb = b ? document.getElementById(b)?.value.trim() : null;
+      const range = va && vb ? `${va}–${vb}` : va ? `≥${va}` : `≤${vb}`;
+      return `<span class="filter-pill">${label} ${range}</span>`;
+    }).join('');
+}
+
+function clearFilters() {
+  FILTER_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.value = ''; el.classList.remove('has-value'); }
+  });
+  applyFilter();
+}
+
+// ── SORT ──────────────────────────────────────────────────────────────────
+function sortBy(key) {
+  if (sortKey === key) sortDir *= -1;
+  else { sortKey = key; sortDir = -1; }
+  document.querySelectorAll('thead th').forEach((th, i) => {
+    th.classList.remove('sort-asc','sort-desc');
+    if (SORT_KEYS[i] === key) th.classList.add(sortDir === -1 ? 'sort-desc' : 'sort-asc');
+  });
+  applyFilter();
+}
+
+// ── FETCH ─────────────────────────────────────────────────────────────────
+async function fetchData() {
+  if (isFetching) return;
+  isFetching = true;
+  const dot  = document.getElementById('status-dot');
+  const stxt = document.getElementById('status-text');
+  try {
+    const priceMin  = getV('priceMin');
+    const priceMax  = getV('priceMax');
+    const changeMin = getV('changeMin');
+    const changeMax = getV('changeMax');
+    const volMin    = getV('volMin');
+    const params = {};
+    if (priceMin  !== null) params.price_min  = priceMin;
+    if (priceMax  !== null) params.price_max  = priceMax;
+    if (changeMin !== null) params.change_min = changeMin;
+    if (changeMax !== null) params.change_max = changeMax;
+    if (volMin    !== null) params.vol_min    = volMin;
+    const qs = Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+    const res = await fetch(`/api/screener-oscillator${qs ? '?'+qs : ''}`);
+    if (!res.ok) throw new Error(res.status);
+    allData = await res.json();
+    // 预处理：给每行加 triggered_count
+    allData = allData.map(row => {
+      const triggered_count = WINDOWS.filter(w => row.windows?.[w]?.triggered).length;
+      return { ...row, triggered_count };
+    });
+    maxVol = allData.reduce((m, r) => Math.max(m, Number(r.total_volume)||0), 1);
+    if (dot) dot.className = 'status-dot live';
+    if (stxt) stxt.innerHTML = `<span class="status-dot live"></span>实时 · ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;
+    applyFilter();
+    const sym = document.getElementById('symbolInput').value.trim().toUpperCase();
+    if (sym) renderLookup(sym);
+  } catch(e) {
+    if (dot) dot.className = 'status-dot error';
+    if (stxt) stxt.innerHTML = `<span class="status-dot error"></span>连接失败`;
+    console.error(e);
+  } finally {
+    isFetching = false;
+  }
+}
+
+// ── APPLY FILTER ──────────────────────────────────────────────────────────
+function applyFilter() {
+  updateHighlights();
+  const priceMin  = getV('priceMin');
+  const priceMax  = getV('priceMax');
+  const changeMin = getV('changeMin');
+  const changeMax = getV('changeMax');
+  const volMin    = getV('volMin');
+
+  const filtered = allData.filter(row => {
+    const price = Number(row.last_price)   || 0;
+    const pct   = Math.abs(Number(row.change_pct) || 0);
+    const vol   = Number(row.total_volume) || 0;
+    if (priceMin  !== null && price < priceMin)  return false;
+    if (priceMax  !== null && price > priceMax)  return false;
+    if (changeMin !== null && pct   < changeMin) return false;
+    if (changeMax !== null && pct   > changeMax) return false;
+    if (volMin    !== null && vol   < volMin)    return false;
+    return true;
+  });
+
+  sortedData = [...filtered].sort((a, b) => {
+    const va = sortKey === 'symbol' ? a[sortKey] : (Number(a[sortKey]) ?? -Infinity);
+    const vb = sortKey === 'symbol' ? b[sortKey] : (Number(b[sortKey]) ?? -Infinity);
+    return va < vb ? sortDir : va > vb ? -sortDir : 0;
+  });
+
+  document.getElementById('count-info').textContent =
+    `触发 ${allData.length} 只 · 当前显示 ${sortedData.length} 只`;
+
+  renderTable();
+}
+
+// ── RENDER TABLE ──────────────────────────────────────────────────────────
+function renderTable() {
+  const tbody = document.getElementById('tbody');
+  if (sortedData.length === 0) {
+    const msg = allData.length === 0
+      ? '<span class="spinner"></span>加载中...'
+      : '暂无符合条件的股票';
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${msg}</td></tr>`;
+    return;
+  }
+
+  const existingRows = {};
+  for (const tr of tbody.querySelectorAll('tr[data-sym]')) {
+    existingRows[tr.dataset.sym] = tr;
+  }
+
+  let ci = 0;
+  for (const row of sortedData) {
+    const html = buildRowHTML(row);
+    let tr = existingRows[row.symbol];
+    if (!tr) { tr = document.createElement('tr'); tr.dataset.sym = row.symbol; }
+    if (tr._lastHtml !== html) { tr.innerHTML = html; tr._lastHtml = html; }
+    if (tbody.children[ci] !== tr) tbody.insertBefore(tr, tbody.children[ci] || null);
+    ci++;
+  }
+  while (tbody.children.length > sortedData.length) tbody.removeChild(tbody.lastChild);
+}
+
+function buildRowHTML(r) {
+  const pct  = Number(r.change_pct);
+  const pcls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+  const sign = pct > 0 ? '+' : '';
+  const vol  = Number(r.total_volume) || 0;
+  const vPct = Math.min(100, maxVol > 0 ? vol / maxVol * 100 : 0);
+  const vr   = Number(r.vol_ratio) || 0;
+
+  // 触发窗口徽标
+  const winTags = WINDOWS
+    .filter(w => r.windows?.[w]?.triggered)
+    .map(w => {
+      const pat = r.windows[w].matchedPattern || '';
+      const cls = pat === 'BAB' ? 'bab' : 'aba';
+      return `<span class="win-tag ${cls}">${w}m ${pat}</span>`;
+    }).join('');
+
+  return `
+    <td><span class="sym" onclick="lookupAndShow('${r.symbol}')">${r.symbol}</span></td>
+    <td class="${pcls}">${fmt(r.last_price,2)}</td>
+    <td class="${pcls}">${sign}${pct.toFixed(2)}%</td>
+    <td class="${pcls}">${sign}${fmt(r.change_amount,3)}</td>
+    <td><div class="vol-cell">${fmtVol(vol)}<div class="mini-bar"><div class="mini-bar-fill" style="width:${vPct.toFixed(1)}%"></div></div></div></td>
+    <td class="${vr >= 2 ? 'up' : 'flat'}">${vr > 0 ? vr.toFixed(2)+'x' : '—'}</td>
+    <td style="color:#555;">${r.bars_count ?? '—'}</td>
+    <td style="color:#26a69a;font-weight:bold;">${r.triggered_count}</td>
+    <td><div class="win-tags">${winTags || '—'}</div></td>`;
+}
+
+// ── 代码查询 ──────────────────────────────────────────────────────────────
+function lookupAndShow(sym) {
+  document.getElementById('symbolInput').value = sym;
+  renderLookup(sym);
+}
+
+function handleLookup() {
+  const sym = document.getElementById('symbolInput').value.trim().toUpperCase();
+  if (!sym) return;
+  renderLookup(sym);
+}
+
+function clearLookup() {
+  document.getElementById('symbolInput').value = '';
+  const el = document.getElementById('lookupResult');
+  el.className = 'lookup-result';
+  el.innerHTML = '';
+}
+
+function renderLookup(sym) {
+  const el  = document.getElementById('lookupResult');
+  const row = allData.find(r => r.symbol.toUpperCase() === sym);
+  if (!row) {
+    el.className = 'lookup-result show';
+    el.innerHTML = `<div style="color:#888;font-size:13px;">
+      未找到 <b style="color:#fff">${sym}</b> —— 可能不在触发列表中，或30分钟内暂无足够数据
+    </div>`;
+    return;
+  }
+
+  const pct  = Number(row.change_pct);
+  const pcls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+  const sign = pct > 0 ? '+' : '';
+
+  const winCards = WINDOWS.map(w => {
+    const wd = row.windows?.[w] || {};
+    const triggered = wd.triggered === true;
+    const cls = triggered ? 'triggered' : 'not-triggered';
+    const badge = triggered
+      ? `<span class="win-badge">✓ 触发</span>`
+      : `<span class="win-badge no">未触发</span>`;
+
+    const stats = triggered ? [
+      { label: '触A次数', val: wd.countA ?? '—', pass: (wd.countA ?? 0) >= 2 },
+      { label: '触B次数', val: wd.countB ?? '—', pass: (wd.countB ?? 0) >= 2 },
+      { label: 'A+B合计', val: wd.totalCount ?? '—', pass: (wd.totalCount ?? 0) >= 5 },
+      { label: '窗口量',  val: wd.winVol != null ? fmtVol(wd.winVol) : '—', pass: (wd.winVol ?? 0) >= 310 },
+      { label: '高低差',  val: wd.winHigh != null && wd.winLow != null ? fmt(wd.winHigh - wd.winLow, 4) : '—', pass: (wd.winHigh - wd.winLow) >= 0.05 },
+    ] : [];
+
+    const patternHTML = triggered && wd.matchedPattern
+      ? `<div><span class="win-pattern">${wd.matchedPattern === 'ABA' ? 'A→B→A' : 'B→A→B'}</span></div>`
+      : triggered ? `<div><span class="win-pattern no">无模式</span></div>` : '';
+
+    const statsHTML = stats.map(s =>
+      `<div class="win-stat">${s.label}<span class="${s.pass ? 'pass' : 'fail'}">${s.val}</span></div>`
+    ).join('');
+
+    return `<div class="win-card ${cls}">
+      <div class="win-card-title"><span>${w} 分钟窗口</span>${badge}</div>
+      <div class="win-stats">${statsHTML}</div>
+      ${patternHTML}
+    </div>`;
+  }).join('');
+
+  el.className = 'lookup-result show';
+  el.innerHTML = `
+    <div class="lookup-sym">
+      ${sym}
+      <span class="${pcls}">${fmt(row.last_price,2)}  ${sign}${pct.toFixed(2)}%</span>
+      <span style="color:#555;">K线 ${row.bars_count ?? '—'} 根</span>
+    </div>
+    <div class="win-grid">${winCards}</div>`;
+}
+
+// ── UTILS ─────────────────────────────────────────────────────────────────
+function fmt(v, dec) {
+  const n = Number(v);
+  return isNaN(n) ? '—' : n.toFixed(dec);
+}
+function fmtVol(v) {
+  return v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(1)+'K' : String(Math.round(v));
+}
+
+// ── COUNTDOWN & AUTO REFRESH ──────────────────────────────────────────────
+setInterval(() => {
+  if (countdown <= 0) {
+    fetchData();
+    countdown = 10;
+  } else {
+    countdown--;
+  }
+  document.getElementById('refresh-timer').textContent = `${countdown}s 后刷新`;
+}, 1000);
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) { fetchData(); countdown = 10; }
+});
+
+FILTER_IDS.forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('input',   () => applyFilter());
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') applyFilter(); });
+});
+
+fetchData();
+</script>
+</body>
+</html>
