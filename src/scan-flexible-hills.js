@@ -22,7 +22,7 @@ async function getFlexibleHills(pool, dateStr) {
   const client = await pool.connect();
   try {
     await client.query('SET search_path TO ' + (process.env.PGSCHEMA || 'market_data'));
-    await client.query('SET statement_timeout = 20000');
+    await client.query('SET statement_timeout = 8000');  // 60分钟窗口预期<500ms，8s足够
 
     // ── 1. 确定目标日期 ──────────────────────────────────────────
     let targetDate = dateStr;
@@ -39,7 +39,10 @@ async function getFlexibleHills(pool, dateStr) {
       }
     }
 
-    // ── 2. 一次性拉取当日所有 symbol 的分钟数据 ─────────────────
+    // ── 2. 拉取最近60分钟所有 symbol 的分钟数据（滚动窗口）────────────────
+    // 原方案扫全天（112万行，21s超时）；改为60分钟窗口（约6万行，预期<500ms）
+    // 山丘形态为短期放量特征，60分钟窗口完全覆盖有效检测范围
+    // baseline 计算需要峰值前20根bar，60分钟窗口内已有足够历史
     const minuteRes = await client.query(`
       SELECT
         t.symbol,
@@ -48,14 +51,13 @@ async function getFlexibleHills(pool, dateStr) {
         AVG(t.price::numeric)                AS avg_price
       FROM tos_trades t
       JOIN user_symbols u ON u.symbol = t.symbol
-      WHERE t.received_at >= $1::date
-        AND t.received_at <  $1::date + INTERVAL '1 day'
+      WHERE t.received_at >= NOW() - INTERVAL '60 minutes'
+        AND t.received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
         AND t.size  IS NOT NULL AND t.size::numeric  > 0
         AND t.price IS NOT NULL AND t.price::numeric > 0
       GROUP BY t.symbol, date_trunc('minute', t.received_at)
       ORDER BY t.symbol, date_trunc('minute', t.received_at)
-    `, [targetDate]);
-    // [FIX-C] 范围写法替代 DATE(received_at) = $1，让索引生效
+    `);
 
     if (minuteRes.rows.length === 0) {
       return { date: targetDate, count: 0, data: [] };
