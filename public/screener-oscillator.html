@@ -268,6 +268,14 @@
           </div>
         </div>
         <div class="filter-group">
+          <label>涨跌额绝对值</label>
+          <div class="filter-row">
+            <input type="number" id="changeAmtMin" placeholder="最低" step="0.01" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="changeAmtMax" placeholder="最高" step="0.01" min="0">
+          </div>
+        </div>
+        <div class="filter-group">
           <label>今日成交量</label>
           <div class="filter-row">
             <input type="number" id="volMin" placeholder="最低" step="1000" min="0">
@@ -338,7 +346,7 @@ let isFetching = false;
 
 const WINDOWS = [15, 20, 25, 30];
 const SORT_KEYS = ['symbol','last_price','change_pct','change_amount','total_volume','vol_ratio','bars_count','triggered_count','_windows'];
-const FILTER_IDS = ['priceMin','priceMax','changeMin','changeMax','volMin'];
+const FILTER_IDS = ['priceMin','priceMax','changeMin','changeMax','changeAmtMin','changeAmtMax','volMin'];
 
 // ── FILTER TOGGLE ─────────────────────────────────────────────────────────
 let filterOpen = false;
@@ -361,6 +369,7 @@ function updateHighlights() {
   const pairs = [
     ['priceMin','priceMax','价格'],
     ['changeMin','changeMax','涨跌%'],
+    ['changeAmtMin','changeAmtMax','涨跌额'],
     ['volMin',null,'今日量'],
   ];
   const pills = document.getElementById('filterPills');
@@ -405,12 +414,16 @@ async function fetchData() {
     const priceMax  = getV('priceMax');
     const changeMin = getV('changeMin');
     const changeMax = getV('changeMax');
+    const changeAmtMin = getV('changeAmtMin');
+    const changeAmtMax = getV('changeAmtMax');
     const volMin    = getV('volMin');
     const params = {};
     if (priceMin  !== null) params.price_min  = priceMin;
     if (priceMax  !== null) params.price_max  = priceMax;
     if (changeMin !== null) params.change_min = changeMin;
     if (changeMax !== null) params.change_max = changeMax;
+    if (changeAmtMin !== null) params.change_amt_min = changeAmtMin;
+    if (changeAmtMax !== null) params.change_amt_max = changeAmtMax;
     if (volMin    !== null) params.vol_min    = volMin;
     const qs = Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
     const res = await fetch(`/api/screener-oscillator${qs ? '?'+qs : ''}`);
@@ -443,16 +456,21 @@ function applyFilter() {
   const priceMax  = getV('priceMax');
   const changeMin = getV('changeMin');
   const changeMax = getV('changeMax');
+  const changeAmtMin = getV('changeAmtMin');
+  const changeAmtMax = getV('changeAmtMax');
   const volMin    = getV('volMin');
 
   const filtered = allData.filter(row => {
     const price = Number(row.last_price)   || 0;
     const pct   = Math.abs(Number(row.change_pct) || 0);
+    const amt   = Math.abs(Number(row.change_amount) || 0);
     const vol   = Number(row.total_volume) || 0;
     if (priceMin  !== null && price < priceMin)  return false;
     if (priceMax  !== null && price > priceMax)  return false;
     if (changeMin !== null && pct   < changeMin) return false;
     if (changeMax !== null && pct   > changeMax) return false;
+    if (changeAmtMin !== null && amt < changeAmtMin) return false;
+    if (changeAmtMax !== null && amt > changeAmtMax) return false;
     if (volMin    !== null && vol   < volMin)    return false;
     return true;
   });
