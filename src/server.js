@@ -2450,47 +2450,48 @@ async function updateDailySummary() {
 
   const client = await pool.connect();
   try {
-    // ── Step 1：从内存缓存 upsert（close/high/low）────────────────────────────
-    // high/low 从 window10m 内存缓存读（每10s刷新，覆盖当日开盘至今）
-    // close    从 priceCache 内存缓存读（每10s刷新，最新成交价）
-    // 完全不查 tos_trades，彻底消除冷启动全天扫描超时（原耗时202s → 现在<1s）
-    const todayDate = todayStr; // YYYY-MM-DD，与 daily_summary.trade_date 一致
-    const memRows = [];
-    for (const row of rankingCache) {
-      const bars       = window10m.get(row.symbol);
-      const cached     = priceCache.get(row.symbol);
-      const closePrice = (cached && cached.price > 0) ? cached.price : null;
-      if (!bars || bars.length === 0) continue;
-      const highPrice = Math.max(...bars.map(b => b.high));
-      const lowPrice  = Math.min(...bars.map(b => b.low));
-      if (highPrice <= 0 || lowPrice <= 0) continue;
-      memRows.push({ symbol: row.symbol, highPrice, lowPrice, closePrice });
-    }
+    // ── Step 1：从 tos_trades 增量聚合 upsert（close/high/low）─────────────────
+    // 冷启动（lastDailySummaryRunAt=null）：全量补算当日 08:00 HKT（UTC 00:00）至今
+    // 正常增量：只扫 lastDailySummaryRunAt 之后的新成交，数据量约 3000-4000 条/分钟
+    // 时段限制：UTC 00:00-09:00（北京时间 08:00-17:00），彻底隔离盘前盘后极值
+    // open_price 不在此处处理，由 initOpenPrice() 独立负责
+    const todayUtcStart = new Date(`${todayStr}T00:00:00Z`);  // 北京 08:00 = UTC 00:00
+    const todayUtcEnd   = new Date(`${todayStr}T09:00:00Z`);  // 北京 17:00 = UTC 09:00
+    const scanFrom = lastDailySummaryRunAt ? new Date(lastDailySummaryRunAt) : todayUtcStart;
 
-    if (memRows.length > 0) {
-      await client.query('SET statement_timeout = 15000');
-      const BATCH = 500;
-      for (let i = 0; i < memRows.length; i += BATCH) {
-        const batch  = memRows.slice(i, i + BATCH);
-        const values = [];
-        const params = [];
-        let pi = 1;
-        for (const r of batch) {
-          values.push(`($${pi},$${pi+1},NULL,$${pi+2},$${pi+3},$${pi+4})`);
-          params.push(r.symbol, todayDate, r.closePrice, r.highPrice, r.lowPrice);
-          pi += 5;
-        }
-        await client.query(`
-          INSERT INTO market_data.daily_summary
-            (symbol, trade_date, open_price, close_price, high_price, low_price)
-          VALUES ${values.join(',')}
-          ON CONFLICT (symbol, trade_date) DO UPDATE SET
-            close_price = COALESCE(EXCLUDED.close_price, daily_summary.close_price),
-            high_price  = GREATEST(daily_summary.high_price,  EXCLUDED.high_price),
-            low_price   = LEAST(daily_summary.low_price,       EXCLUDED.low_price)
-            -- total_volume 由 orderbook_processor_bl.py L1DBSnapshotWriter 负责写入，此处不更新
-        `, params);
-      }
+    if (scanFrom < todayUtcEnd) {  // 17:00 后无需再扫
+      // 冷启动（全天全量）给 600s，正常增量（60s窗口）给 30s
+      const timeout = lastDailySummaryRunAt ? 30000 : 600000;
+      await client.query(`SET statement_timeout = ${timeout}`);
+      const result = await client.query(`
+        INSERT INTO market_data.daily_summary
+          (symbol, trade_date, close_price, high_price, low_price)
+        SELECT
+          symbol,
+          $3::date                                                           AS trade_date,
+          (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close_price,
+          MAX(price::numeric)                                                AS high_price,
+          MIN(price::numeric)                                                AS low_price
+        FROM market_data.tos_trades
+        WHERE received_at >= $1::timestamptz
+          AND received_at <  $2::timestamptz
+          AND received_at <  $4::timestamptz
+          AND price > 0
+        GROUP BY symbol
+        ON CONFLICT (symbol, trade_date) DO UPDATE SET
+          close_price = COALESCE(EXCLUDED.close_price, daily_summary.close_price),
+          high_price  = GREATEST(daily_summary.high_price,  EXCLUDED.high_price),
+          low_price   = LEAST(daily_summary.low_price,       EXCLUDED.low_price)
+          -- open_price  由 initOpenPrice() 负责，此处不更新
+          -- total_volume 由 orderbook_processor_bl.py 负责，此处不更新
+      `, [
+        scanFrom,      // $1 增量起点（冷启动=当日UTC 00:00，正常=上次执行时间）
+        scanTo,        // $2 增量终点（当前时间）
+        todayStr,      // $3 trade_date
+        todayUtcEnd,   // $4 时段上限（UTC 09:00 = 北京 17:00）
+      ]);
+      const mode = lastDailySummaryRunAt ? 'incremental' : 'cold-start';
+      console.log(`[DailySummary] Step1 ${mode}: ${result.rowCount} rows upserted`);
     }
 
     // Step 1 成功后立即推进时间戳

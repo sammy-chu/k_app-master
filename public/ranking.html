@@ -182,6 +182,7 @@
             const res = await fetch('/api/price-swing-screener');
             if (!res.ok) return;
             const data = await res.json();
+            if (isPinsDisabled()) return; // 置顶已关闭，不写入新的波动置顶
             const now = Date.now();
             data.forEach(item => {
                 if (!swingPinnedSymbols.has(item.symbol)) {
@@ -228,6 +229,7 @@
     JSON.parse(sessionStorage.getItem('pinnedDown') || '[]').forEach(([s, t]) => pinnedDownSymbols.set(s, t));
 
     function updatePinned(data) {
+        if (isPinsDisabled()) return; // 置顶全局关闭，不自动置顶
         const now = Date.now();
         data.forEach(item => {
             if (manuallyUnpinned.has(item.symbol)) return; // 已手动取消，跳过自动置顶
@@ -553,32 +555,40 @@
         updateSide([...pinnedDown, ...normalDown], 'down');
     }
 
-    let pinsCleared = false; // 当前是否处于"已取消置顶"状态
+    // ── 全局置顶开关，存 sessionStorage，刷新后保持 ──
+    function isPinsDisabled() { return sessionStorage.getItem('pinsDisabled') === '1'; }
+    function setPinsDisabled(v) { v ? sessionStorage.setItem('pinsDisabled', '1') : sessionStorage.removeItem('pinsDisabled'); }
 
-    function clearAllPins() {
+    function syncPinBtnState() {
         const btn = document.getElementById('clear-pin-btn');
-        if (!pinsCleared) {
-            // ── 第一次：取消置顶，记录黑名单 ──
-            pinnedUpSymbols.forEach((_, s) => manuallyUnpinned.add(s));
-            pinnedDownSymbols.forEach((_, s) => manuallyUnpinned.add(s));
-            sessionStorage.setItem('manuallyUnpinned', JSON.stringify([...manuallyUnpinned]));
-            pinnedUpSymbols.clear();
-            pinnedDownSymbols.clear();
-            sessionStorage.removeItem('pinnedUp');
-            sessionStorage.removeItem('pinnedDown');
-            pinsCleared = true;
+        if (!btn) return;
+        if (isPinsDisabled()) {
             btn.textContent = '📌 恢复置顶';
             btn.style.borderColor = '#f0a500';
             btn.style.color = '#f0a500';
         } else {
-            // ── 第二次：清空黑名单，下次刷新重新自动置顶 ──
-            manuallyUnpinned.clear();
-            sessionStorage.removeItem('manuallyUnpinned');
-            pinsCleared = false;
             btn.textContent = '📌 取消置顶';
             btn.style.borderColor = '#555';
             btn.style.color = '#ccc';
         }
+    }
+
+    function clearAllPins() {
+        if (!isPinsDisabled()) {
+            // ── 取消置顶：清空所有置顶，开启全局开关 ──
+            pinnedUpSymbols.clear();
+            pinnedDownSymbols.clear();
+            swingPinnedSymbols.clear(); // 同时清除紫色波动置顶
+            sessionStorage.removeItem('pinnedUp');
+            sessionStorage.removeItem('pinnedDown');
+            manuallyUnpinned.clear();
+            sessionStorage.removeItem('manuallyUnpinned');
+            setPinsDisabled(true);
+        } else {
+            // ── 恢复置顶：关闭全局开关，下次数据刷新重新自动置顶 ──
+            setPinsDisabled(false);
+        }
+        syncPinBtnState();
         renderTable();
     }
 
@@ -592,6 +602,7 @@
         btn.textContent = collapsed ? '▸ 筛选' : '▾ 筛选';
     }
 
+    syncPinBtnState();
     fetchData();
     setInterval(() => { countdown-- <= 0 ? fetchData() : updateTimerDisplay(); }, 1000);
 </script>
