@@ -324,11 +324,12 @@
         <th onclick="sortBy('vol_ratio')">量比</th>
         <th onclick="sortBy('bars_count')">K线数</th>
         <th onclick="sortBy('triggered_count')" title="触发的窗口数量">触发窗口</th>
+        <th onclick="sortBy('avg_5day_range')" title="近5个历史交易日(最高价-最低价)均值">5日振幅</th>
         <th title="各窗口触发情况，ABA/BAB为模式类型">窗口详情</th>
       </tr>
     </thead>
     <tbody id="tbody">
-      <tr class="empty-row"><td colspan="9"><span class="spinner"></span>加载中...</td></tr>
+      <tr class="empty-row"><td colspan="10"><span class="spinner"></span>加载中...</td></tr>
     </tbody>
   </table>
 
@@ -345,7 +346,7 @@ let countdown  = 10;
 let isFetching = false;
 
 const WINDOWS = [15, 20, 25, 30];
-const SORT_KEYS = ['symbol','last_price','change_pct','change_amount','total_volume','vol_ratio','bars_count','triggered_count','_windows'];
+const SORT_KEYS = ['symbol','last_price','change_pct','change_amount','total_volume','vol_ratio','bars_count','triggered_count','avg_5day_range','_windows'];
 const FILTER_IDS = ['priceMin','priceMax','changeMin','changeMax','changeAmtMin','changeAmtMax','volMin'];
 
 // ── FILTER TOGGLE ─────────────────────────────────────────────────────────
@@ -494,7 +495,7 @@ function renderTable() {
     const msg = allData.length === 0
       ? '<span class="spinner"></span>加载中...'
       : '暂无符合条件的股票';
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${msg}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="10">${msg}</td></tr>`;
     return;
   }
 
@@ -541,6 +542,7 @@ function buildRowHTML(r) {
     <td class="${vr >= 2 ? 'up' : 'flat'}">${vr > 0 ? vr.toFixed(2)+'x' : '—'}</td>
     <td style="color:#555;">${r.bars_count ?? '—'}</td>
     <td style="color:#26a69a;font-weight:bold;">${r.triggered_count}</td>
+    <td style="color:#90caf9;">${r.avg_5day_range != null ? fmt(r.avg_5day_range, 2) : '—'}</td>
     <td><div class="win-tags">${winTags || '—'}</div></td>`;
 }
 

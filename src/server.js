@@ -525,19 +525,22 @@ async function updateWindow10m() {
 // 30分钟 OHLCV 聚合缓存，与 updateWindow10m 结构完全相同，仅拉取窗口扩展到30分钟
 // 供震荡筛选规则使用，每10秒刷新，仅用 pricePool
 // updateWindow30m：滚动追加模式
-// 冷启动（window30mLastBucket === null）：只查最近5分钟，数据量与 window10m 相当（~71ms）
+// 冷启动（window30mLastBucket === null）：查最近30分钟，重启后立即填满bar，无需预热
 // 热更新：只查 lastBucket 所在分钟起的增量（通常1-2分钟），极快
 // 内存中每个 symbol 最多保留30根bar，超出时从头部淘汰（oldest-first）
 // 当前分钟的bar在该分钟内会被反复更新（因为分钟未收盘），通过 bucket 时间匹配原地替换
 async function updateWindow30m() {
   const client = await pricePool.connect();
   try {
-    await client.query('SET statement_timeout = 15000');
+    // 冷启动给60s（30分钟数据量稍大但索引命中很快），热更新保持15s
+    const isColdStart = !window30mLastBucket;
+    await client.query(`SET statement_timeout = ${isColdStart ? 60000 : 15000}`);
 
-    // 冷启动查5分钟；热更新从上次已知bucket所在分钟起查（覆盖当前分钟未收盘的bar）
+    // 冷启动查30分钟（足够填满15-30根bar，重启后震荡筛选器立即可用）
+    // 热更新从上次已知bucket所在分钟起查（覆盖当前分钟未收盘的bar）
     const cutoff = window30mLastBucket
       ? new Date(window30mLastBucket.getTime() - 60 * 1000) // 往前退1分钟，确保当前分钟bar被重新聚合
-      : new Date(Date.now() - 5 * 60 * 1000);
+      : new Date(Date.now() - 30 * 60 * 1000);
 
     const { rows } = await client.query(`
       SELECT
@@ -1241,6 +1244,42 @@ async function refreshIntradayAvgVolCache() {
   }
 }
 
+// 5日高低差均值缓存：symbol -> avg_range（近5个历史交易日均值，每小时刷新）
+const dailyRangeCache = new Map();
+
+async function refreshDailyRangeCache() {
+  const client = await pool.connect();
+  try {
+    await client.query('SET statement_timeout = 20000');
+    const { rows } = await client.query(`
+      SELECT symbol,
+             ROUND(AVG(high_price - low_price)::numeric, 2) AS avg_range
+      FROM (
+        SELECT symbol, high_price, low_price,
+               ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY trade_date DESC) AS rn
+        FROM market_data.daily_summary
+        WHERE trade_date < current_date
+          AND high_price IS NOT NULL
+          AND low_price  IS NOT NULL
+          AND high_price > low_price
+      ) t
+      WHERE rn <= 5
+      GROUP BY symbol
+      HAVING COUNT(*) >= 3
+    `);
+    dailyRangeCache.clear();
+    for (const row of rows) {
+      dailyRangeCache.set(row.symbol, Number(row.avg_range));
+    }
+    console.log(`[DailyRangeCache] refreshed, ${dailyRangeCache.size} symbols`);
+  } catch (err) {
+    console.error('[DailyRangeCache] Error:', err.message);
+  } finally {
+    await client.query('SET statement_timeout = 0').catch(() => {});
+    client.release();
+  }
+}
+
 // === 当日分时成交量写入 daily_intraday_vol ===
 // period_vol 存当天从开盘到该分钟的累计成交量（单调递增）
 // 数据来源已改为 daily_summary.total_volume（PPro8 L1DB 全量，由 orderbook_processor_bl.py 写入）
@@ -1936,8 +1975,9 @@ app.get('/api/screener-oscillator', (req, res) => {
         bid:           quote ? quote.bid    : null,
         ask:           quote ? quote.ask    : null,
         spread:        quote ? quote.spread : null,
-        bars_count:    bars.length,
-        windows:       windowResults,  // { 15: {...}, 20: {...}, 25: {...}, 30: {...} }
+        bars_count:     bars.length,
+        windows:        windowResults,  // { 15: {...}, 20: {...}, 25: {...}, 30: {...} }
+        avg_5day_range: dailyRangeCache.get(row.symbol) ?? null,
       });
     }
 
@@ -2850,6 +2890,9 @@ function startAlertMonitor() {
     console.log(`[IntradayAvgVol] starting, interval=60s`);
     refreshIntradayAvgVolCache();
     runScan('IntradayAvgVol', refreshIntradayAvgVolCache, 60000);
+
+    refreshDailyRangeCache();  // 启动时立即执行一次
+    runScan('DailyRangeCache', refreshDailyRangeCache, 60 * 60 * 1000);  // 每小时刷新
   }, 30000);
 
   // ── t=45s：IntradayVolWriter [DISABLED] ────────────────────────────────
