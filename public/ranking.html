@@ -240,6 +240,7 @@
     }
 
     function isPinnedActive(item, side) {
+        if (manuallyUnpinned.has(item.symbol)) return false; // 手动取消置顶，永不复活
         const map = side === 'up' ? pinnedUpSymbols : pinnedDownSymbols;
         if (!map.has(item.symbol)) return false;
         if (Math.abs(Number(item.change_amount)) >= 0.5) return true;
@@ -247,6 +248,7 @@
     }
 
     function getPinnedMark(item, side) {
+        if (manuallyUnpinned.has(item.symbol)) return ''; // 手动取消置顶，不显示标记
         const map = side === 'up' ? pinnedUpSymbols : pinnedDownSymbols;
         if (!map.has(item.symbol)) return '';
         if (Math.abs(Number(item.change_amount)) >= 0.5) return ' 📌';

@@ -2360,13 +2360,12 @@ async function ensureVolumeAlertSchema() {
 }
 
 // initOpenPrice：启动时异步执行一次，独立于 DailySummaryUpdater 60s循环
-// 分时间窗口递进查询（30min→120min→全天），每段数据量小，单次不超时
-// 过滤补推历史单：trim(trade_time)::time <= received_at(上海时区)::time + 1s
-// 触发时机：第一次 DailySummaryUpdater 完成后延迟5s，避开锁竞争
-// 失败自动重试30s，成功后置 openPriceDone=true 永久跳过
-let _openPriceRunning = false;  // 防止并发执行
+// 单次全天查询，与手动排查SQL完全一致，无分窗口逻辑
+// 超时600s，查询成功后才置 openPriceDone=true，失败30s后自动重试
+// pg_advisory_xact_lock 防止与 DailySummaryUpdater 并发死锁
+let _openPriceRunning = false;
 async function initOpenPrice() {
-  if (_openPriceRunning) return;
+  if (_openPriceRunning || openPriceDone) return;
   const nowBeijing = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
   if (nowBeijing.getHours() * 60 + nowBeijing.getMinutes() < 8 * 60) {
     setTimeout(initOpenPrice, 30000);
@@ -2375,71 +2374,32 @@ async function initOpenPrice() {
   _openPriceRunning = true;
   const client = await pool.connect();
   try {
-    // 分窗口递进：从开盘时间(08:00)起算，上限逐步扩大
-    // 先查开盘后前30分钟（08:00~08:30），覆盖大部分活跃股票
-    // 未覆盖的扩展到前120分钟（08:00~10:00），再到全天兜底
-    // 关键：上限固定在开盘时间+偏移量，而非 NOW()-偏移量（避免查到盘中数据当作开盘价）
-    const dayOpen = `current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'`;
-    const windows = [
-      { label: '30min',  upperBound: `${dayOpen} + interval '30 minutes'` },
-      { label: '120min', upperBound: `${dayOpen} + interval '120 minutes'` },
-      { label: 'full',   upperBound: null },   // null = 无上限，查全天
-    ];
-
-    let totalUpdated = 0;
-    for (const { label, upperBound } of windows) {
-      // 已全部写完则退出
-      const { rows: remaining } = await client.query(`
-        SELECT COUNT(*) AS cnt FROM market_data.daily_summary
-        WHERE trade_date = current_date AND open_price IS NULL
-      `);
-      if (Number(remaining[0].cnt) === 0 && totalUpdated > 0) break;
-
-      await client.query('SET statement_timeout = 30000');
-      const whereUpper = upperBound
-        ? `AND received_at < ${upperBound}`
-        : '';
-
-      try {
-        const r = await client.query(`
-          UPDATE market_data.daily_summary ds
-          SET open_price = correct.open_price
-          FROM (
-            SELECT symbol,
-              (array_agg(price::numeric ORDER BY received_at ASC, id ASC))[1] AS open_price
-            FROM market_data.tos_trades
-            WHERE received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
-              ${whereUpper}
-              AND price IS NOT NULL AND price::numeric > 0
-              AND market_time IS NOT NULL AND market_time != ''
-              AND trim(trade_time)::time
-                  <= (received_at AT TIME ZONE 'Asia/Shanghai')::time + interval '1 second'
-            GROUP BY symbol
-          ) correct
-          WHERE ds.symbol     = correct.symbol
-            AND ds.trade_date = current_date
-            AND (
-              ds.open_price IS NULL
-              OR (
-                ds.open_price > 0
-                AND ABS(ds.open_price - correct.open_price) / correct.open_price > 0.05
-              )
-            )
-        `);
-        totalUpdated += r.rowCount;
-        if (r.rowCount > 0) {
-          console.log(`[OpenPrice] window=${label}, updated ${r.rowCount} rows`);
-        }
-      } catch (windowErr) {
-        console.warn(`[OpenPrice] window=${label} failed:`, windowErr.message);
-        // 单窗口失败不中断，继续下一个窗口
-      }
-    }
-
+    await client.query('SET statement_timeout = 600000');
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(20250609)');
+    const r = await client.query(`
+      UPDATE market_data.daily_summary ds
+      SET open_price = correct.open_price
+      FROM (
+        SELECT symbol,
+          (array_agg(price::numeric ORDER BY received_at ASC, id ASC))[1] AS open_price
+        FROM market_data.tos_trades
+        WHERE received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
+          AND price IS NOT NULL AND price::numeric > 0
+          AND market_time IS NOT NULL AND market_time != ''
+          AND trim(trade_time)::time
+              <= (received_at AT TIME ZONE 'Asia/Shanghai')::time + interval '1 second'
+        GROUP BY symbol
+      ) correct
+      WHERE ds.symbol     = correct.symbol
+        AND ds.trade_date = current_date
+    `);
+    await client.query('COMMIT');
     openPriceDone = true;
-    console.log(`[OpenPrice] init done, total updated ${totalUpdated} rows`);
+    console.log(`[OpenPrice] done, updated ${r.rowCount} rows`);
   } catch (err) {
-    console.warn('[OpenPrice] init failed, will retry in 30s:', err.message);
+    await client.query('ROLLBACK').catch(() => {});
+    console.warn('[OpenPrice] failed, will retry in 30s:', err.message);
     setTimeout(initOpenPrice, 30000);
   } finally {
     await client.query('SET statement_timeout = 0').catch(() => {});
@@ -2447,6 +2407,7 @@ async function initOpenPrice() {
     _openPriceRunning = false;
   }
 }
+
 
 // updateDailySummary 增量模式
 // 原全天汇总模式（FIX 6/H/I/J/K/L）改为增量更新，彻底避免全天重算：
