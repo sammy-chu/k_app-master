@@ -2399,24 +2399,19 @@ async function ensureVolumeAlertSchema() {
   volumeSchemaReady = true;
 }
 
-// initOpenPrice：启动时异步执行一次，独立于 DailySummaryUpdater 60s循环
-// 单次全天查询，与手动排查SQL完全一致，无分窗口逻辑
-// 超时600s，查询成功后才置 openPriceDone=true，失败30s后自动重试
-// pg_advisory_xact_lock 防止与 DailySummaryUpdater 并发死锁
+// initOpenPrice：每60秒定期补写，持续覆盖当日 open_price IS NULL 的行
+// 数据源：tos_trades 当日 08:00 至今的第一笔成交（全天范围，覆盖盘中新股）
+// 只更新 open_price IS NULL 的行，已有开盘价的行不覆盖
+// 无 openPriceDone 限制，新股上市后下一个60秒自动补写
 let _openPriceRunning = false;
 async function initOpenPrice() {
-  if (_openPriceRunning || openPriceDone) return;
+  if (_openPriceRunning) return;
   const nowBeijing = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
-  if (nowBeijing.getHours() * 60 + nowBeijing.getMinutes() < 8 * 60) {
-    setTimeout(initOpenPrice, 30000);
-    return;
-  }
+  if (nowBeijing.getHours() * 60 + nowBeijing.getMinutes() < 8 * 60) return;
   _openPriceRunning = true;
   const client = await pool.connect();
   try {
-    await client.query('SET statement_timeout = 600000');
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(20250609)');
+    await client.query('SET statement_timeout = 30000');
     const r = await client.query(`
       UPDATE market_data.daily_summary ds
       SET open_price = correct.open_price
@@ -2425,22 +2420,19 @@ async function initOpenPrice() {
           (array_agg(price::numeric ORDER BY received_at ASC, id ASC))[1] AS open_price
         FROM market_data.tos_trades
         WHERE received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
+          AND received_at <  current_date AT TIME ZONE 'Asia/Shanghai' + interval '9 hours'
           AND price IS NOT NULL AND price::numeric > 0
-          AND market_time IS NOT NULL AND market_time != ''
-          AND trim(trade_time)::time
-              <= (received_at AT TIME ZONE 'Asia/Shanghai')::time + interval '1 second'
         GROUP BY symbol
       ) correct
       WHERE ds.symbol     = correct.symbol
         AND ds.trade_date = current_date
+        AND ds.open_price IS NULL
     `);
-    await client.query('COMMIT');
-    openPriceDone = true;
-    console.log(`[OpenPrice] done, updated ${r.rowCount} rows`);
+    if (r.rowCount > 0) {
+      console.log(`[OpenPrice] patched ${r.rowCount} new symbols`);
+    }
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    console.warn('[OpenPrice] failed, will retry in 30s:', err.message);
-    setTimeout(initOpenPrice, 30000);
+    console.warn('[OpenPrice] failed:', err.message);
   } finally {
     await client.query('SET statement_timeout = 0').catch(() => {});
     client.release();
@@ -2464,7 +2456,7 @@ async function initOpenPrice() {
 // FIX I 保留：过滤补推历史单
 
 let lastDailySummaryRunAt = null;  // 增量扫描起点
-let openPriceDone = false;         // 当日 open_price 已写完，跳过 Step 2
+// openPriceDone 已移除：initOpenPrice 改为定期补写，无需一次性标志
 
 async function updateDailySummary() {
   // [FIX K] 非交易时段不写入
@@ -2482,7 +2474,7 @@ async function updateDailySummary() {
   if (updateDailySummary._lastDate !== todayStr) {
     updateDailySummary._lastDate = todayStr;
     lastDailySummaryRunAt = null;
-    openPriceDone = false;
+    // openPriceDone 已移除，initOpenPrice 定期补写无需重置
   }
 
   // 增量起点保留用于记录上次执行时间（Step 2 open_price 纠错时仍有参考意义）
@@ -2878,12 +2870,9 @@ function startAlertMonitor() {
   console.log(`[DailySummaryUpdater] starting, interval=60s`);
   runScan('DailySummaryUpdater', updateDailySummary, 60000);
 
-  // ── t=70s：OpenPrice 初始化（主池，仅执行一次，失败自动重试）────────────────
-  // 延迟70s：等第一次 DailySummaryUpdater（60s循环）完成后再执行，避开锁竞争和deadlock
-  setTimeout(() => {
-    console.log('[OpenPrice] initializing...');
-    initOpenPrice();
-  }, 70000);
+  // ── OpenPrice：每60秒定期补写 open_price IS NULL 的行（主池）──────────────
+  // 启动后立即执行一次，之后每60秒检查新股，有补写则打日志，无则静默
+  runScan('OpenPrice', initOpenPrice, 60000);
 
   // ── t=30s：IntradayAvgVol（主池，60s，延迟30s避开启动期高峰）────────────
   setTimeout(() => {
@@ -2891,8 +2880,7 @@ function startAlertMonitor() {
     refreshIntradayAvgVolCache();
     runScan('IntradayAvgVol', refreshIntradayAvgVolCache, 60000);
 
-    refreshDailyRangeCache();  // 启动时立即执行一次
-    runScan('DailyRangeCache', refreshDailyRangeCache, 60 * 60 * 1000);  // 每小时刷新
+    runScan('DailyRangeCache', refreshDailyRangeCache, 60 * 60 * 1000);  // 启动立即执行，之后每小时刷新
   }, 30000);
 
   // ── t=45s：IntradayVolWriter [DISABLED] ────────────────────────────────
@@ -2941,12 +2929,11 @@ function startAlertMonitor() {
       window30m.clear();
       window30mLastBucket = null;
       lastDailySummaryRunAt = null;
-      openPriceDone = false;
+      // openPriceDone 已移除，initOpenPrice 定期补写无需重置
       console.log('[StableHistory] cleared for new trading day');
       console.log('[Window30m] cleared for new trading day');
       pruneStableSnapshot();
-      console.log('[DailySummary] open_price flag reset for new trading day');
-      setTimeout(initOpenPrice, 5 * 60 * 1000);  // 07:55+5min=08:00开盘后触发
+      // initOpenPrice 已改为 runScan 定期补写，跨天自动恢复，无需手动触发
     }
   }, 60000);
 }
