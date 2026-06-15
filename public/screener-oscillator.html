@@ -63,7 +63,7 @@
     overflow: hidden; max-height: 0; opacity: 0;
     transition: max-height 0.25s ease, opacity 0.2s ease;
   }
-  .filter-body.open { max-height: 160px; opacity: 1; }
+  .filter-body.open { max-height: 220px; opacity: 1; }
   .filter-panel {
     background: #2a2a2a; padding: 12px 16px 14px;
     border-radius: 0 0 6px 6px; border-top: 1px solid #333;
@@ -281,6 +281,14 @@
             <input type="number" id="volMin" placeholder="最低" step="1000" min="0">
           </div>
         </div>
+        <div class="filter-group">
+          <label>5日振幅区间</label>
+          <div class="filter-row">
+            <input type="number" id="rangeMin" placeholder="最低" step="0.1" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="rangeMax" placeholder="最高" step="0.1" min="0">
+          </div>
+        </div>
         <div class="filter-actions">
           <button class="btn" onclick="clearFilters()">清空</button>
           <button class="btn primary" onclick="applyFilter()">筛选</button>
@@ -347,7 +355,7 @@ let isFetching = false;
 
 const WINDOWS = [15, 20, 25, 30];
 const SORT_KEYS = ['symbol','last_price','change_pct','change_amount','total_volume','vol_ratio','bars_count','triggered_count','avg_5day_range','_windows'];
-const FILTER_IDS = ['priceMin','priceMax','changeMin','changeMax','changeAmtMin','changeAmtMax','volMin'];
+const FILTER_IDS = ['priceMin','priceMax','changeMin','changeMax','changeAmtMin','changeAmtMax','volMin','rangeMin','rangeMax'];
 
 // ── FILTER TOGGLE ─────────────────────────────────────────────────────────
 let filterOpen = false;
@@ -372,6 +380,7 @@ function updateHighlights() {
     ['changeMin','changeMax','涨跌%'],
     ['changeAmtMin','changeAmtMax','涨跌额'],
     ['volMin',null,'今日量'],
+    ['rangeMin','rangeMax','5日振幅'],
   ];
   const pills = document.getElementById('filterPills');
   if (!pills) return;
@@ -460,6 +469,8 @@ function applyFilter() {
   const changeAmtMin = getV('changeAmtMin');
   const changeAmtMax = getV('changeAmtMax');
   const volMin    = getV('volMin');
+  const rangeMin  = getV('rangeMin');
+  const rangeMax  = getV('rangeMax');
 
   const filtered = allData.filter(row => {
     const price = Number(row.last_price)   || 0;
@@ -473,6 +484,9 @@ function applyFilter() {
     if (changeAmtMin !== null && amt < changeAmtMin) return false;
     if (changeAmtMax !== null && amt > changeAmtMax) return false;
     if (volMin    !== null && vol   < volMin)    return false;
+    const avgRange = row.avg_5day_range != null ? Number(row.avg_5day_range) : null;
+    if (rangeMin !== null && (avgRange === null || avgRange < rangeMin)) return false;
+    if (rangeMax !== null && (avgRange === null || avgRange > rangeMax)) return false;
     return true;
   });
 
