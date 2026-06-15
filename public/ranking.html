@@ -112,8 +112,9 @@
     </div>
 
     <div class="header-bar">
-        <h1 class="title">今日涨跌排名</h1>
+        <h1 class="title" id="page-title">今日涨跌排名</h1>
         <div class="controls">
+            <button class="btn-toggle-filters" id="btn-rank-mode" onclick="toggleRankMode()" title="切换排名指标：今日涨跌 / 近30分钟涨跌">⏱ 半小时涨跌榜</button>
             <button class="btn-toggle-filters" id="btn-toggle-filters" onclick="toggleFilters()">▾ 筛选</button>
             <div class="filters">
                 <div class="filter-item">
@@ -216,6 +217,55 @@
         up:   { col: 'change_pct', dir: 'desc' },
         down: { col: 'change_pct', dir: 'desc' }
     };
+
+    // ── 排名指标切换：'day' = 今日涨跌，'30m' = 近30分钟涨跌 ──
+    let rankMode = 'day';
+
+    // 返回当前排名指标对应的字段名
+    function getMetricCols() {
+        return rankMode === '30m'
+            ? { pct: 'change_30m_pct', amt: 'change_30m' }
+            : { pct: 'change_pct',     amt: 'change_amount' };
+    }
+
+    // 返回当前排名指标对应的表头文案
+    function getMetricLabels(side) {
+        if (rankMode === '30m') {
+            return { amtLabel: '30分涨跌额', pctLabel: side === 'up' ? '30分涨幅%' : '30分跌幅%' };
+        }
+        return { amtLabel: '涨跌额', pctLabel: side === 'up' ? '涨幅%' : '跌幅%' };
+    }
+
+    // 取出某行在当前指标下的数值；数据不足（如刚开盘）时为 null
+    function getMetricVal(item) {
+        const v = item[getMetricCols().pct];
+        return (v === null || v === undefined) ? null : Number(v);
+    }
+
+    function toggleRankMode() {
+        rankMode = rankMode === 'day' ? '30m' : 'day';
+
+        const btn = document.getElementById('btn-rank-mode');
+        if (rankMode === '30m') {
+            btn.textContent = '📅 今日涨跌榜';
+            btn.style.borderColor = '#007acc';
+            btn.style.color = '#007acc';
+        } else {
+            btn.textContent = '⏱ 半小时涨跌榜';
+            btn.style.borderColor = '#555';
+            btn.style.color = '#aaa';
+        }
+
+        document.getElementById('page-title').textContent =
+            rankMode === '30m' ? '近30分钟涨跌排名' : '今日涨跌排名';
+
+        // 切换模式时，默认排序列同步切到当前指标，方向重置为降序
+        const { pct } = getMetricCols();
+        dualSort.up   = { col: pct, dir: 'desc' };
+        dualSort.down = { col: pct, dir: 'desc' };
+
+        renderTable();
+    }
 
     // ── 置顶 Map ──
     const pinnedUpSymbols   = new Map();
@@ -432,37 +482,51 @@
             if (sk) sk.style.display = 'grid';
         }
 
-        const sorted     = [...filteredData].sort((a, b) => Number(b.change_pct) - Number(a.change_pct));
+        const sorted = [...filteredData].sort((a, b) => {
+            const va = getMetricVal(a), vb = getMetricVal(b);
+            if (va === null && vb === null) return 0;
+            if (va === null) return 1;   // 数据未就绪的排到最后
+            if (vb === null) return -1;
+            return vb - va;
+        });
         const pinnedUp   = sorted.filter(x => isPinnedActive(x, 'up'));
-        const normalUp   = sorted.filter(x => !isPinnedActive(x, 'up')   && Number(x.change_pct) >= 0);
+        const normalUp   = sorted.filter(x => !isPinnedActive(x, 'up')   && getMetricVal(x) !== null && getMetricVal(x) >= 0);
         const pinnedDown = sorted.filter(x => isPinnedActive(x, 'down'));
-        const normalDown = sorted.filter(x => !isPinnedActive(x, 'down') && Number(x.change_pct) <= -0.001);
+        const normalDown = sorted.filter(x => !isPinnedActive(x, 'down') && getMetricVal(x) !== null && getMetricVal(x) <= -0.001);
 
         // 初始化骨架
         if (!document.getElementById('ranking-skeleton')) {
             document.getElementById('content').innerHTML = `
                 <div class="dual-panel" id="ranking-skeleton">
                     <div class="panel panel-up">
-                        <div class="panel-title up">▲ 涨幅榜</div>
+                        <div class="panel-title up" id="panel-title-up">▲ 涨幅榜</div>
                         <table><thead id="thead-up"></thead><tbody id="tbody-up"></tbody></table>
                     </div>
                     <div class="panel panel-down">
-                        <div class="panel-title down">▼ 跌幅榜</div>
+                        <div class="panel-title down" id="panel-title-down">▼ 跌幅榜</div>
                         <table><thead id="thead-down"></thead><tbody id="tbody-down"></tbody></table>
                     </div>
                 </div>`;
         }
+        document.getElementById('panel-title-up').textContent   = rankMode === '30m' ? '▲ 30分涨幅榜' : '▲ 涨幅榜';
+        document.getElementById('panel-title-down').textContent = rankMode === '30m' ? '▼ 30分跌幅榜' : '▼ 跌幅榜';
 
         const updateSide = (rawList, side) => {
             const { col, dir } = dualSort[side];
+            const { pct: metricPct, amt: metricAmt } = getMetricCols();
+            const { amtLabel, pctLabel } = getMetricLabels(side);
             const swingPinned = rawList.filter(x => swingPinnedSymbols.has(x.symbol) && (Date.now() - swingPinnedSymbols.get(x.symbol) <= SWING_PIN_MS));
             const pinned = rawList.filter(x => isPinnedActive(x, side) && !swingPinnedSymbols.has(x.symbol));
             const normal = rawList.filter(x => !isPinnedActive(x, side) && !swingPinnedSymbols.has(x.symbol) && (
-                side === 'up' ? Number(x.change_pct) > -0.001 : Number(x.change_pct) <= -0.001
+                side === 'up' ? (getMetricVal(x) !== null && getMetricVal(x) > -0.001) : (getMetricVal(x) !== null && getMetricVal(x) <= -0.001)
             ));
             const sortFn = (a, b) => {
-                const valA = col === '2m' ? (get2mChange(a.symbol, Number(a.last_price)) ?? -Infinity) : Number(a[col]);
-                const valB = col === '2m' ? (get2mChange(b.symbol, Number(b.last_price)) ?? -Infinity) : Number(b[col]);
+                const numOr = (item) => {
+                    const v = col === '2m' ? get2mChange(item.symbol, Number(item.last_price)) : item[col];
+                    return (v === null || v === undefined) ? -Infinity : Number(v);
+                };
+                const valA = numOr(a);
+                const valB = numOr(b);
                 return dir === 'desc' ? valB - valA : valA - valB;
             };
             const sortedList = [...swingPinned.sort(sortFn), ...pinned.sort(sortFn), ...normal.sort(sortFn)].slice(0, 250);
@@ -475,8 +539,8 @@
                 <th style="text-align:left">代码</th>
                 <th onclick="handleDualSort('${side}','last_price')"    ${thCls('last_price')}>最新价 ${icon('last_price')}</th>
                 <th onclick="handleDualSort('${side}','open_price')"    ${thCls('open_price')}>开盘价 ${icon('open_price')}</th>
-                <th onclick="handleDualSort('${side}','change_amount')" ${thCls('change_amount')}>涨跌额 ${icon('change_amount')}</th>
-                <th onclick="handleDualSort('${side}','change_pct')"    ${thCls('change_pct')}>${side === 'up' ? '涨幅%' : '跌幅%'} ${icon('change_pct')}</th>
+                <th onclick="handleDualSort('${side}','${metricAmt}')" ${thCls(metricAmt)}>${amtLabel} ${icon(metricAmt)}</th>
+                <th onclick="handleDualSort('${side}','${metricPct}')"    ${thCls(metricPct)}>${pctLabel} ${icon(metricPct)}</th>
                 <th onclick="handleDualSort('${side}','total_volume')"  ${thCls('total_volume')}>成交量 ${icon('total_volume')}</th>
                 <th onclick="handleDualSort('${side}','2m')"            ${thCls('2m')}>2分涨跌 ${icon('2m')}</th>
             </tr>`;
@@ -496,7 +560,17 @@
                 }
                 ci++;
 
-                const changeClass  = Number(item.change_pct) >= 0 ? 'up' : 'down';
+                const metricAmtVal = item[metricAmt];
+                const metricPctVal = item[metricPct];
+                const changeClass  = (metricPctVal === null || metricPctVal === undefined)
+                    ? 'flat'
+                    : (Number(metricPctVal) >= 0 ? 'up' : 'down');
+                const amtStr = (metricAmtVal === null || metricAmtVal === undefined)
+                    ? '-'
+                    : `${Number(metricAmtVal) > 0 ? '+' : ''}${formatNumber(metricAmtVal)}`;
+                const pctStr = (metricPctVal === null || metricPctVal === undefined)
+                    ? '-'
+                    : `${Number(metricPctVal) > 0 ? '+' : ''}${formatNumber(metricPctVal)}%`;
                 const isPinned     = isPinnedActive(item, side);
                 const pinnedMark   = getPinnedMark(item, side);
                 const borderColor  = side === 'up' ? '#26a69a' : '#ef5350';
@@ -540,8 +614,8 @@
                     <td class="symbol">${item.symbol}</td>
                     <td class="${changeClass}">${formatNumber(item.last_price)}</td>
                     <td>${formatNumber(item.open_price)}</td>
-                    <td class="${changeClass}">${item.change_amount > 0 ? '+' : ''}${formatNumber(item.change_amount)}</td>
-                    <td class="${changeClass}">${item.change_pct > 0 ? '+' : ''}${formatNumber(item.change_pct)}%</td>
+                    <td class="${changeClass}">${amtStr}</td>
+                    <td class="${changeClass}">${pctStr}</td>
                     <td>${formatVolume(item.total_volume)}</td>
                     <td>${c2mStr}</td>`;
 

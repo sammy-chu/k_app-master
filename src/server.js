@@ -1075,9 +1075,13 @@ app.get('/api/l2-alert-history', async (req, res) => {
              h.price_change_abs, h.price_change_ratio, h.volume_change_abs, h.volume_change_ratio,
              h.level_delta, h.alert_message, h.created_at,
              COALESCE(d.total_volume, 0) AS total_volume,
-             d.open_price
+             -- open_price: 与 refreshRankingCache 保持一致，优先 ohlc_snapshot，兜底 daily_summary
+             COALESCE(os.open_price, d.open_price) AS open_price
       FROM ${table} h
-      LEFT JOIN market_data.daily_summary d ON h.stock_code = d.symbol AND d.trade_date = CURRENT_DATE
+      LEFT JOIN market_data.daily_summary d
+             ON d.symbol = h.stock_code AND d.trade_date = CURRENT_DATE
+      LEFT JOIN market_data.ohlc_snapshot os
+             ON os.symbol = h.stock_code AND os.trade_date = CURRENT_DATE
       ${timeCondition}
       ORDER BY h.created_at DESC
       LIMIT $1
@@ -1352,6 +1356,9 @@ async function snapshotTodayAllMinutes() {
 }
 
 // [FIX 4] refreshRankingCache 不再查 tos_trades，改用内存 priceCache join
+// [OHLCSnapshot] Open/High/Low/Volume 优先从 ohlc_snapshot 取（GetLv1实时值），
+//   ohlc_writer.py 未运行或该股无数据时自动回退到 daily_summary（零中断）
+// Last 继续由 priceCache（tos_trades）提供，链路不变
 async function refreshRankingCache() {
   const client = await pool.connect();
   try {
@@ -1368,18 +1375,25 @@ async function refreshRankingCache() {
         HAVING AVG(total_volume) >= 1000
       )
       SELECT
-        t.symbol,
-        t.open_price,
-        t.close_price,
-        t.high_price,
-        t.low_price,
-        t.total_volume,
-        COALESCE(ROUND(a.avg_vol), 0) AS avg_vol_10d
-      FROM market_data.daily_summary t
-      LEFT JOIN avg_vol a USING (symbol)
-      WHERE t.trade_date = current_date
-        AND NOT (t.symbol = ANY($1::text[]))
-        AND t.open_price > 0
+        ds.symbol,
+        -- open_price: ohlc_snapshot 优先（GetLv1 官方值），无则回退 daily_summary
+        COALESCE(os.open_price,  ds.open_price)   AS open_price,
+        ds.close_price,
+        -- high/low/volume: ohlc_snapshot 优先，无则回退 daily_summary
+        COALESCE(os.high_price,  ds.high_price)   AS high_price,
+        COALESCE(os.low_price,   ds.low_price)    AS low_price,
+        COALESCE(os.volume,      ds.total_volume) AS total_volume,
+        COALESCE(ROUND(a.avg_vol), 0)             AS avg_vol_10d,
+        -- 来源标记，方便日志排查
+        CASE WHEN os.symbol IS NOT NULL THEN 'ohlc' ELSE 'daily_summary' END AS ohlc_src
+      FROM market_data.daily_summary ds
+      LEFT JOIN market_data.ohlc_snapshot os
+             ON os.symbol = ds.symbol
+            AND os.trade_date = current_date
+      LEFT JOIN avg_vol a ON a.symbol = ds.symbol
+      WHERE ds.trade_date = current_date
+        AND NOT (ds.symbol = ANY($1::text[]))
+        AND ds.open_price > 0
     `;
 
     const { rows } = await client.query(sql, [safeEtfList]);
@@ -1390,7 +1404,8 @@ async function refreshRankingCache() {
       const openPrice  = Number(row.open_price);
       const closePrice = Number(row.close_price) || 0;
 
-      // 优先级：priceCache（tos_trades成交价）> quoteCache mid > close_price > open_price
+      // 優先級：priceCache（tos_trades成交价）> quoteCache mid > close_price > open_price
+      // Last 来源不变，始终来自 priceCache
       let lastPrice;
       if (cached) {
         lastPrice = cached.price;
@@ -1407,15 +1422,15 @@ async function refreshRankingCache() {
       const intradayAvg = intradayAvgVolCache.get(row.symbol);
       const avg_vol_10d = intradayAvg != null ? intradayAvg : Number(row.avg_vol_10d);
       return {
-        symbol: row.symbol,
-        open_price: openPrice,
-        last_price: lastPrice,
+        symbol:        row.symbol,
+        open_price:    openPrice,
+        last_price:    lastPrice,
         change_amount: changeAmt,
-        change_pct: openPrice > 0 ? Number((changeAmt / openPrice * 100).toFixed(2)) : 0,
-        total_volume: row.total_volume,
+        change_pct:    openPrice > 0 ? Number((changeAmt / openPrice * 100).toFixed(2)) : 0,
+        total_volume:  row.total_volume,
         avg_vol_10d,
-        high_price: Number(row.high_price || 0),
-        low_price:  Number(row.low_price  || 0),
+        high_price:    Number(row.high_price || 0),
+        low_price:     Number(row.low_price  || 0),
       };
     });
 
@@ -1431,7 +1446,10 @@ async function refreshRankingCache() {
       `);
       console.log(`[RankingCache] 0 rows. DB date=${diag.rows[0].db_date}, range: ${diag.rows[0].min_date}~${diag.rows[0].max_date}, total=${diag.rows[0].total}`);
     } else {
-      console.log(`[RankingCache] Refreshed, ${rankingCache.length} rows`);
+      // 统计数据来源分布，方便确认 ohlc_snapshot 是否生效
+      const ohlcCount = rows.filter(r => r.ohlc_src === 'ohlc').length;
+      const dsCount   = rows.length - ohlcCount;
+      console.log(`[RankingCache] Refreshed, ${rankingCache.length} rows (ohlc_snapshot=${ohlcCount}, daily_summary_fallback=${dsCount})`);
     }
   } catch (err) {
     console.error('[RankingCache] Error:', err.message);
@@ -1464,7 +1482,22 @@ app.get('/api/ranking', (req, res) => {
             }
           }
         }
-        return { ...row, price_change_3m };
+
+        // ── 半小时涨跌：基于 window30m（最近30根1分钟bar）──
+        // 用最早一根bar的开盘价作为"30分钟前"价格；数据覆盖不足25分钟时返回 null（开盘初期）
+        let change_30m = null;
+        let change_30m_pct = null;
+        const bars30 = window30m.get(row.symbol);
+        if (bars30 && bars30.length > 0) {
+          const oldest = bars30[0];
+          const ageMin = (Date.now() - oldest.bucket.getTime()) / 60000;
+          if (ageMin >= 25 && oldest.open > 0) {
+            change_30m = Number((Number(row.last_price) - oldest.open).toFixed(4));
+            change_30m_pct = Number((change_30m / oldest.open * 100).toFixed(2));
+          }
+        }
+
+        return { ...row, price_change_3m, change_30m, change_30m_pct };
       });
 
     const filteredRows = result.filter(row => {
@@ -2136,8 +2169,9 @@ const MARKET_CLOSE_MINS = 16 * 60;
 const TOTAL_MARKET_MINS = MARKET_CLOSE_MINS - MARKET_OPEN_MINS;
 
 function getMarketElapsedPct() {
-  const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const mins = nowET.getHours() * 60 + nowET.getMinutes();
+  // BL 市场为北京时间，交易时段 08:00-16:00（MARKET_OPEN_MINS=480, CLOSE=960）
+  const nowBJ = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+  const mins = nowBJ.getHours() * 60 + nowBJ.getMinutes();
   if (mins <= MARKET_OPEN_MINS) return 0;
   if (mins >= MARKET_CLOSE_MINS) return 1.0;
   return (mins - MARKET_OPEN_MINS) / TOTAL_MARKET_MINS;
