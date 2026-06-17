@@ -363,6 +363,11 @@ const window10m = new Map();
 const window30m = new Map();
 let window30mLastBucket = null; // 上次已写入的最新 bucket（Date对象），null表示冷启动
 
+// 精确30分钟基准价缓存：symbol -> { price, at }
+// 每60秒更新一次，取 "30分钟前最后一笔成交价"，避免 window30m 滚动淘汰造成的跳变
+const price30mCache = new Map();
+let price30mLastUpdate = 0;
+
 // 稳定选股历史快照：symbol -> [{ time, r1_val, r2_vol, r3_pct, r4_pct, r5_cnt, last_price, change_pct }, ...]
 const stableHistory = new Map();
 
@@ -588,6 +593,44 @@ async function updateWindow30m() {
     }
   } catch (err) {
     console.error('[Window30m] Update failed:', err.message);
+  } finally {
+    client.release();
+  }
+}
+
+// 更新精确30分钟基准价缓存
+// 查询每个 symbol 在"30分钟前"那个时间点的最后一笔成交价
+// 每60秒执行一次（基准价变化慢，不需要高频）
+async function updatePrice30mCache() {
+  const now = Date.now();
+  if (now - price30mLastUpdate < 60000) return;
+  price30mLastUpdate = now;
+
+  const client = await pricePool.connect();
+  try {
+    await client.query('SET statement_timeout = 15000');
+    // 取所有在今日有成交的 symbol，各自30分钟前的最后一笔价格
+    const { rows } = await client.query(`
+      SELECT DISTINCT ON (symbol)
+        symbol,
+        price::numeric AS price,
+        received_at    AS at
+      FROM tos_trades
+      WHERE received_at BETWEEN NOW() - INTERVAL '31 minutes'
+                             AND NOW() - INTERVAL '29 minutes'
+        AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
+        AND price IS NOT NULL
+        AND price::numeric > 0
+      ORDER BY symbol, received_at DESC
+    `);
+    for (const row of rows) {
+      price30mCache.set(row.symbol, {
+        price: Number(row.price),
+        at:    row.at,
+      });
+    }
+  } catch (err) {
+    console.error('[Price30mCache] Update failed:', err.message);
   } finally {
     client.release();
   }
@@ -1075,8 +1118,8 @@ app.get('/api/l2-alert-history', async (req, res) => {
              h.price_change_abs, h.price_change_ratio, h.volume_change_abs, h.volume_change_ratio,
              h.level_delta, h.alert_message, h.created_at,
              COALESCE(d.total_volume, 0) AS total_volume,
-             -- open_price: 与 refreshRankingCache 保持一致，优先 ohlc_snapshot，兜底 daily_summary
-             COALESCE(os.open_price, d.open_price) AS open_price
+             -- open_price: 只使用 ohlc_snapshot（GetLv1 官方值）
+             os.open_price AS open_price
       FROM ${table} h
       LEFT JOIN market_data.daily_summary d
              ON d.symbol = h.stock_code AND d.trade_date = CURRENT_DATE
@@ -1375,25 +1418,24 @@ async function refreshRankingCache() {
         HAVING AVG(total_volume) >= 1000
       )
       SELECT
-        ds.symbol,
-        -- open_price: ohlc_snapshot 优先（GetLv1 官方值），无则回退 daily_summary
-        COALESCE(os.open_price,  ds.open_price)   AS open_price,
+        os.symbol,
+        -- open_price: 只使用 ohlc_snapshot（GetLv1 官方值），无数据则不进入排名
+        os.open_price                             AS open_price,
         ds.close_price,
         -- high/low/volume: ohlc_snapshot 优先，无则回退 daily_summary
         COALESCE(os.high_price,  ds.high_price)   AS high_price,
         COALESCE(os.low_price,   ds.low_price)    AS low_price,
         COALESCE(os.volume,      ds.total_volume) AS total_volume,
         COALESCE(ROUND(a.avg_vol), 0)             AS avg_vol_10d,
-        -- 来源标记，方便日志排查
-        CASE WHEN os.symbol IS NOT NULL THEN 'ohlc' ELSE 'daily_summary' END AS ohlc_src
-      FROM market_data.daily_summary ds
-      LEFT JOIN market_data.ohlc_snapshot os
-             ON os.symbol = ds.symbol
-            AND os.trade_date = current_date
-      LEFT JOIN avg_vol a ON a.symbol = ds.symbol
-      WHERE ds.trade_date = current_date
-        AND NOT (ds.symbol = ANY($1::text[]))
-        AND ds.open_price > 0
+        'ohlc'                                    AS ohlc_src
+      FROM market_data.ohlc_snapshot os
+      LEFT JOIN market_data.daily_summary ds
+             ON ds.symbol = os.symbol
+            AND ds.trade_date = current_date
+      LEFT JOIN avg_vol a ON a.symbol = os.symbol
+      WHERE os.trade_date = current_date
+        AND NOT (os.symbol = ANY($1::text[]))
+        AND os.open_price > 0
     `;
 
     const { rows } = await client.query(sql, [safeEtfList]);
@@ -1446,10 +1488,8 @@ async function refreshRankingCache() {
       `);
       console.log(`[RankingCache] 0 rows. DB date=${diag.rows[0].db_date}, range: ${diag.rows[0].min_date}~${diag.rows[0].max_date}, total=${diag.rows[0].total}`);
     } else {
-      // 统计数据来源分布，方便确认 ohlc_snapshot 是否生效
-      const ohlcCount = rows.filter(r => r.ohlc_src === 'ohlc').length;
-      const dsCount   = rows.length - ohlcCount;
-      console.log(`[RankingCache] Refreshed, ${rankingCache.length} rows (ohlc_snapshot=${ohlcCount}, daily_summary_fallback=${dsCount})`);
+      // open_price 全部来自 ohlc_snapshot
+      console.log(`[RankingCache] Refreshed, ${rankingCache.length} rows (source=ohlc_snapshot only)`);
     }
   } catch (err) {
     console.error('[RankingCache] Error:', err.message);
@@ -1483,18 +1523,14 @@ app.get('/api/ranking', (req, res) => {
           }
         }
 
-        // ── 半小时涨跌：基于 window30m（最近30根1分钟bar）──
-        // 用最早一根bar的开盘价作为"30分钟前"价格；数据覆盖不足25分钟时返回 null（开盘初期）
+        // ── 半小时涨跌：使用精确基准价（30分钟前最后一笔成交价）──
+        // 避免 window30m 滚动淘汰造成的基准价跳变
         let change_30m = null;
         let change_30m_pct = null;
-        const bars30 = window30m.get(row.symbol);
-        if (bars30 && bars30.length > 0) {
-          const oldest = bars30[0];
-          const ageMin = (Date.now() - oldest.bucket.getTime()) / 60000;
-          if (ageMin >= 25 && oldest.open > 0) {
-            change_30m = Number((Number(row.last_price) - oldest.open).toFixed(4));
-            change_30m_pct = Number((change_30m / oldest.open * 100).toFixed(2));
-          }
+        const base30 = price30mCache.get(row.symbol);
+        if (base30 && base30.price > 0 && Number(row.last_price) > 0) {
+          change_30m     = Number((Number(row.last_price) - base30.price).toFixed(4));
+          change_30m_pct = Number((change_30m / base30.price * 100).toFixed(2));
         }
 
         return { ...row, price_change_3m, change_30m, change_30m_pct };
@@ -2882,6 +2918,13 @@ function startAlertMonitor() {
     runScan('Window30m', updateWindow30m, 10000);
   }, 5000);
 
+  // ── t=8s：Price30mCache（精确30分钟基准价，每60秒更新）─────────────────────
+  setTimeout(() => {
+    console.log(`[Price30mCache] starting, interval=60s`);
+    updatePrice30mCache();
+    runScan('Price30mCache', updatePrice30mCache, 60000);
+  }, 8000);
+
   // ── t=15s：QuoteCache（已有延迟，保持不变）────────────────────────────────
   console.log(`[QuoteCache] cold-start initializing in 15s...`);
   setTimeout(() => {
@@ -2962,15 +3005,135 @@ function startAlertMonitor() {
       stableHistory.clear();
       window30m.clear();
       window30mLastBucket = null;
+      price30mCache.clear();
+      price30mLastUpdate = 0;
       lastDailySummaryRunAt = null;
-      // openPriceDone 已移除，initOpenPrice 定期补写无需重置
       console.log('[StableHistory] cleared for new trading day');
       console.log('[Window30m] cleared for new trading day');
+      console.log('[Price30mCache] cleared for new trading day');
       pruneStableSnapshot();
       // initOpenPrice 已改为 runScan 定期补写，跨天自动恢复，无需手动触发
     }
   }, 60000);
 }
+
+// ══════════════════════════════════════════════════════════════
+// 波动率 API
+// ══════════════════════════════════════════════════════════════
+
+// 当日股票汇总（按股票聚合）
+// GET /api/volatility/today?date=YYYY-MM-DD&min_sigma=0&limit=200
+app.get('/api/volatility/today', async (req, res) => {
+  const date     = String(req.query.date     || '').trim() || new Date().toISOString().slice(0,10);
+  const minSigma = parseFloat(req.query.min_sigma || '0') || 0;
+  const limit    = Math.min(parseInt(req.query.limit  || '200'), 500);
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        vc.symbol,
+        COUNT(*)                              AS cycle_count,
+        ROUND(AVG(vc.sigma_pct)::numeric, 4) AS avg_sigma_pct,
+        ROUND(MAX(vc.sigma_pct)::numeric, 4) AS max_sigma_pct,
+        ROUND(MIN(vc.sigma_pct)::numeric, 4) AS min_sigma_pct,
+        MIN(vc.cycle_start)                  AS first_cycle,
+        MAX(vc.cycle_end)                    AS last_cycle,
+        SUM(vc.total_vol)                    AS total_vol,
+        vw.add_min_vol,
+        vw.add_chg_pct,
+        vw.added_at
+      FROM market_data.volatility_cycles vc
+      LEFT JOIN market_data.volatility_watched vw
+             ON vw.symbol = vc.symbol AND vw.trade_date = vc.trade_date
+      WHERE vc.trade_date = $1::date
+        AND vc.sigma_pct  >= $2
+      GROUP BY vc.symbol, vw.add_min_vol, vw.add_chg_pct, vw.added_at
+      ORDER BY max_sigma_pct DESC
+      LIMIT $3
+    `, [date, minSigma, limit]);
+    res.json(rows);
+  } catch (e) {
+    console.error('[volatility/today]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 单只股票当日时序（用于画图）
+// GET /api/volatility/timeseries?symbol=SPCX.BL&date=YYYY-MM-DD
+app.get('/api/volatility/timeseries', async (req, res) => {
+  const symbol = String(req.query.symbol || '').trim().toUpperCase();
+  const date   = String(req.query.date   || '').trim() || new Date().toISOString().slice(0,10);
+  if (!symbol) return res.status(400).json({ error: 'symbol required' });
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        cycle_start, cycle_end,
+        sigma_pct,
+        r1, r2, r3, r4, r5,
+        c0, c1, c2, c3, c4, c5,
+        vol1, vol2, vol3, vol4, vol5,
+        total_vol, price_change_pct
+      FROM market_data.volatility_cycles
+      WHERE symbol = $1 AND trade_date = $2::date
+      ORDER BY cycle_end ASC
+    `, [symbol, date]);
+    res.json(rows);
+  } catch (e) {
+    console.error('[volatility/timeseries]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 最新N条记录（实时滚动用）
+// GET /api/volatility/latest?date=YYYY-MM-DD&min_sigma=0&limit=100
+app.get('/api/volatility/latest', async (req, res) => {
+  const date     = String(req.query.date     || '').trim() || new Date().toISOString().slice(0,10);
+  const minSigma = parseFloat(req.query.min_sigma || '0') || 0;
+  const limit    = Math.min(parseInt(req.query.limit || '100'), 500);
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        symbol, cycle_start, cycle_end,
+        sigma_pct, r1, r2, r3, r4, r5,
+        c0, c5, price_change_pct, total_vol
+      FROM market_data.volatility_cycles
+      WHERE trade_date = $1::date
+        AND sigma_pct  >= $2
+      ORDER BY cycle_end DESC
+      LIMIT $3
+    `, [date, minSigma, limit]);
+    res.json(rows);
+  } catch (e) {
+    console.error('[volatility/latest]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 历史多日统计
+// GET /api/volatility/history?symbol=SPCX.BL&days=10
+app.get('/api/volatility/history', async (req, res) => {
+  const symbol = String(req.query.symbol || '').trim().toUpperCase();
+  const days   = Math.min(parseInt(req.query.days || '10'), 30);
+  if (!symbol) return res.status(400).json({ error: 'symbol required' });
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        trade_date,
+        COUNT(*)                              AS cycle_count,
+        ROUND(AVG(sigma_pct)::numeric, 4)    AS avg_sigma_pct,
+        ROUND(MAX(sigma_pct)::numeric, 4)    AS max_sigma_pct,
+        SUM(total_vol)                        AS total_vol
+      FROM market_data.volatility_cycles
+      WHERE symbol = $1
+        AND trade_date >= CURRENT_DATE - $2
+      GROUP BY trade_date
+      ORDER BY trade_date DESC
+    `, [symbol, days]);
+    res.json(rows);
+  } catch (e) {
+    console.error('[volatility/history]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // 静态文件服务
 app.use(express.static(path.join(__dirname, '../public'), {
@@ -2990,6 +3153,7 @@ app.get('/swing-screener',  (req, res) => res.sendFile(path.join(__dirname, '../
 app.get('/screener',        (req, res) => res.sendFile(path.join(__dirname, '../public/screener.html')));
 app.get('/stable-screener', (req, res) => res.sendFile(path.join(__dirname, '../public/screener-stable.html')));
 app.get('/oscillator-screener', (req, res) => res.sendFile(path.join(__dirname, '../public/screener-oscillator.html')));
+app.get('/volatility',          (req, res) => res.sendFile(path.join(__dirname, '../public/volatility.html')));
 
 ensureTables().then(() => {
   startAlertMonitor();

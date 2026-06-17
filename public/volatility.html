@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>波动率监控</title>
+<style>
+/* ── 基础 ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0d1117; color: #c9d1d9;
+  font-family: 'Segoe UI', 'Consolas', monospace;
+  font-size: 13px; min-height: 100vh;
+}
+a { color: #58a6ff; text-decoration: none; }
+
+/* ── 顶部导航 ── */
+.nav {
+  background: #161b22; border-bottom: 1px solid #30363d;
+  padding: 0 16px; display: flex; align-items: center; gap: 20px; height: 44px;
+}
+.nav-title { color: #e6edf3; font-weight: 600; font-size: 15px; }
+.nav a { color: #8b949e; font-size: 12px; padding: 4px 8px; border-radius: 4px; }
+.nav a:hover { color: #e6edf3; background: #21262d; }
+
+/* ── 控制栏 ── */
+.ctrl-bar {
+  background: #161b22; border-bottom: 1px solid #30363d;
+  padding: 8px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+}
+.ctrl-bar label { color: #8b949e; font-size: 12px; }
+.ctrl-bar input, .ctrl-bar select {
+  background: #0d1117; border: 1px solid #30363d; border-radius: 4px;
+  color: #c9d1d9; padding: 4px 8px; font-size: 12px; outline: none;
+}
+.ctrl-bar input:focus, .ctrl-bar select:focus { border-color: #58a6ff; }
+.btn {
+  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+  color: #c9d1d9; padding: 4px 12px; font-size: 12px; cursor: pointer;
+}
+.btn:hover { background: #30363d; }
+.btn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+#status-bar { margin-left: auto; color: #8b949e; font-size: 11px; }
+
+/* ── 主体布局 ── */
+.layout {
+  display: grid;
+  grid-template-columns: 420px 1fr;
+  grid-template-rows: 1fr;
+  height: calc(100vh - 44px - 42px);
+  gap: 0;
+}
+
+/* ── 左侧：股票列表 ── */
+.panel-left {
+  border-right: 1px solid #30363d;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.panel-header {
+  background: #161b22; padding: 6px 12px;
+  border-bottom: 1px solid #30363d;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px; color: #8b949e; font-weight: 600;
+}
+.panel-header span.count { color: #58a6ff; }
+
+/* 股票列表表格 */
+.sym-table-wrap { flex: 1; overflow-y: auto; }
+table.sym-table {
+  width: 100%; border-collapse: collapse;
+}
+table.sym-table th {
+  background: #161b22; color: #8b949e;
+  padding: 5px 8px; font-size: 11px; font-weight: 600;
+  text-align: left; position: sticky; top: 0; z-index: 1;
+  border-bottom: 1px solid #30363d; cursor: pointer; user-select: none;
+}
+table.sym-table th:hover { color: #c9d1d9; }
+table.sym-table td {
+  padding: 5px 8px; border-bottom: 1px solid #21262d;
+  font-size: 12px;
+}
+table.sym-table tr { cursor: pointer; transition: background 0.1s; }
+table.sym-table tr:hover { background: #161b22; }
+table.sym-table tr.selected { background: #1c2333; }
+.sym-table .sym { color: #e6edf3; font-weight: 600; }
+.sym-table .up   { color: #3fb950; }
+.sym-table .down { color: #f85149; }
+.sigma-high   { color: #f85149; }
+.sigma-medium { color: #e3b341; }
+.sigma-low    { color: #8b949e; }
+
+/* σ 色块 */
+.sigma-bar {
+  display: inline-block; height: 10px; border-radius: 2px;
+  vertical-align: middle; margin-left: 4px;
+}
+
+/* ── 右侧：详情 ── */
+.panel-right {
+  display: flex; flex-direction: column; overflow: hidden;
+}
+
+/* 右侧 Tab */
+.tab-bar {
+  background: #161b22; border-bottom: 1px solid #30363d;
+  display: flex; gap: 0;
+}
+.tab-btn {
+  padding: 7px 16px; font-size: 12px; cursor: pointer;
+  color: #8b949e; border-bottom: 2px solid transparent;
+}
+.tab-btn:hover { color: #c9d1d9; }
+.tab-btn.active { color: #e6edf3; border-bottom-color: #58a6ff; }
+.tab-content { flex: 1; overflow: hidden; display: none; }
+.tab-content.active { display: flex; flex-direction: column; }
+
+/* ── 时序图 ── */
+.chart-area { flex: 1; position: relative; padding: 12px; }
+#sigma-chart { width: 100%; height: 100%; }
+
+/* ── 事件流 ── */
+.stream-wrap { flex: 1; overflow-y: auto; }
+table.stream-table {
+  width: 100%; border-collapse: collapse;
+}
+table.stream-table th {
+  background: #161b22; color: #8b949e;
+  padding: 5px 10px; font-size: 11px; font-weight: 600;
+  text-align: left; position: sticky; top: 0; z-index: 1;
+  border-bottom: 1px solid #30363d;
+}
+table.stream-table td {
+  padding: 5px 10px; border-bottom: 1px solid #21262d; font-size: 11px;
+}
+table.stream-table tr:hover { background: #161b22; }
+.stream-table .r-pos { color: #3fb950; }
+.stream-table .r-neg { color: #f85149; }
+
+/* ── 历史Tab ── */
+.hist-wrap { flex: 1; overflow-y: auto; padding: 12px; }
+.hist-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+.hist-card {
+  background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+  padding: 10px 12px;
+}
+.hist-card .hdate { color: #58a6ff; font-size: 11px; margin-bottom: 4px; }
+.hist-card .hval  { font-size: 18px; font-weight: 700; }
+.hist-card .hmeta { color: #8b949e; font-size: 11px; margin-top: 4px; }
+
+/* ── 空态 ── */
+.empty { padding: 40px; text-align: center; color: #484f58; font-size: 13px; }
+
+/* ── 滚动条 ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- 导航 -->
+<nav class="nav">
+  <span class="nav-title">📊 波动率监控</span>
+  <a href="/ranking">涨跌排名</a>
+  <a href="/l2-alerts">大单历史</a>
+  <a href="/screener">筛选器</a>
+  <a href="/volatility" style="color:#e6edf3;background:#21262d">波动率</a>
+</nav>
+
+<!-- 控制栏 -->
+<div class="ctrl-bar">
+  <label>日期</label>
+  <input type="date" id="inp-date">
+
+  <label>最小σ%</label>
+  <input type="number" id="inp-minsigma" value="0" min="0" step="0.1" style="width:64px">
+
+  <label>排序</label>
+  <select id="sel-sort">
+    <option value="max">最高σ</option>
+    <option value="avg">平均σ</option>
+    <option value="count">周期数</option>
+  </select>
+
+  <button class="btn" id="btn-refresh" onclick="fetchToday()">刷新</button>
+  <button class="btn" id="btn-auto" onclick="toggleAuto()">自动刷新</button>
+
+  <label style="margin-left:8px">
+    <input type="checkbox" id="chk-filter-zero" onchange="renderSymTable()"> 过滤σ=0
+  </label>
+
+  <span id="status-bar">—</span>
+</div>
+
+<!-- 主体 -->
+<div class="layout">
+  <!-- 左侧股票列表 -->
+  <div class="panel-left">
+    <div class="panel-header">
+      股票列表
+      <span class="count" id="sym-count">0</span> 只
+      &nbsp;|&nbsp;
+      <span id="sym-sort-label">按最高σ</span>
+    </div>
+    <div class="sym-table-wrap">
+      <table class="sym-table" id="sym-table">
+        <thead>
+          <tr>
+            <th onclick="sortBy('symbol')">#&nbsp;代码</th>
+            <th onclick="sortBy('max_sigma_pct')">最高σ%</th>
+            <th onclick="sortBy('avg_sigma_pct')">平均σ%</th>
+            <th onclick="sortBy('cycle_count')">周期数</th>
+            <th onclick="sortBy('add_chg_pct')">涨跌幅</th>
+          </tr>
+        </thead>
+        <tbody id="sym-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 右侧详情 -->
+  <div class="panel-right">
+    <!-- Tab 切换 -->
+    <div class="tab-bar">
+      <div class="tab-btn active" onclick="switchTab('chart')">📈 σ时序图</div>
+      <div class="tab-btn" onclick="switchTab('stream')">📋 记录流</div>
+      <div class="tab-btn" onclick="switchTab('history')">🗂 历史</div>
+      <span id="detail-sym" style="margin-left:auto;padding:7px 16px;color:#58a6ff;font-weight:600;font-size:13px"></span>
+    </div>
+
+    <!-- Tab: σ时序图 -->
+    <div class="tab-content active" id="tab-chart">
+      <div class="chart-area">
+        <canvas id="sigma-chart"></canvas>
+      </div>
+    </div>
+
+    <!-- Tab: 记录流 -->
+    <div class="tab-content" id="tab-stream">
+      <div class="stream-wrap">
+        <table class="stream-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>σ%</th>
+              <th>基准价</th>
+              <th>末价</th>
+              <th>变动%</th>
+              <th>r1</th><th>r2</th><th>r3</th><th>r4</th><th>r5</th>
+              <th>成交笔</th>
+            </tr>
+          </thead>
+          <tbody id="stream-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tab: 历史 -->
+    <div class="tab-content" id="tab-history">
+      <div class="hist-wrap">
+        <div class="hist-grid" id="hist-grid"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── 状态 ──
+let _data      = [];       // 当日股票汇总
+let _selected  = null;     // 当前选中 symbol
+let _sortCol   = 'max_sigma_pct';
+let _sortDesc  = true;
+let _autoTimer = null;
+let _chart     = null;
+let _tab       = 'chart';
+
+// ── 初始化 ──
+document.getElementById('inp-date').value = todayStr();
+fetchToday();
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// ── 自动刷新 ──
+function toggleAuto() {
+  const btn = document.getElementById('btn-auto');
+  if (_autoTimer) {
+    clearInterval(_autoTimer);
+    _autoTimer = null;
+    btn.classList.remove('active');
+    btn.textContent = '自动刷新';
+  } else {
+    _autoTimer = setInterval(() => {
+      fetchToday();
+      if (_selected) fetchTimeseries(_selected);
+    }, 5000);
+    btn.classList.add('active');
+    btn.textContent = '停止自动';
+  }
+}
+
+// ── 获取当日汇总 ──
+async function fetchToday() {
+  const date     = document.getElementById('inp-date').value || todayStr();
+  const minSigma = document.getElementById('inp-minsigma').value || 0;
+  setStatus('加载中...');
+  try {
+    const r = await fetch(`/api/volatility/today?date=${date}&min_sigma=${minSigma}&limit=200`);
+    _data = await r.json();
+    renderSymTable();
+    setStatus(`${_data.length} 只  ${new Date().toLocaleTimeString()}`);
+  } catch (e) {
+    setStatus('加载失败: ' + e.message);
+  }
+}
+
+// ── 渲染股票列表 ──
+function sortBy(col) {
+  if (_sortCol === col) _sortDesc = !_sortDesc;
+  else { _sortCol = col; _sortDesc = true; }
+  renderSymTable();
+}
+
+function renderSymTable() {
+  const filterZero = document.getElementById('chk-filter-zero').checked;
+  let rows = [..._data];
+  if (filterZero) rows = rows.filter(r => parseFloat(r.max_sigma_pct) > 0);
+
+  rows.sort((a, b) => {
+    let av = a[_sortCol] ?? '', bv = b[_sortCol] ?? '';
+    if (_sortCol === 'symbol') return _sortDesc ? bv.localeCompare(av) : av.localeCompare(bv);
+    return _sortDesc ? parseFloat(bv) - parseFloat(av) : parseFloat(av) - parseFloat(bv);
+  });
+
+  document.getElementById('sym-count').textContent = rows.length;
+
+  const tbody = document.getElementById('sym-tbody');
+  tbody.innerHTML = '';
+  rows.forEach((r, i) => {
+    const maxS  = parseFloat(r.max_sigma_pct);
+    const avgS  = parseFloat(r.avg_sigma_pct);
+    const chg   = parseFloat(r.add_chg_pct);
+    const sCls  = maxS >= 2 ? 'sigma-high' : maxS >= 1 ? 'sigma-medium' : 'sigma-low';
+    const bw    = Math.min(maxS / 5 * 60, 60);
+    const bclr  = maxS >= 2 ? '#f85149' : maxS >= 1 ? '#e3b341' : '#3fb950';
+    const chgS  = isNaN(chg) ? '-' : (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+    const chgC  = isNaN(chg) ? '' : chg >= 0 ? 'up' : 'down';
+    const sel   = _selected === r.symbol ? 'selected' : '';
+    tbody.innerHTML += `
+      <tr class="${sel}" onclick="selectSym('${r.symbol}')">
+        <td><span class="sym">${r.symbol.replace('.BL','')}</span></td>
+        <td>
+          <span class="${sCls}">${maxS.toFixed(4)}%</span>
+          <span class="sigma-bar" style="width:${bw}px;background:${bclr}"></span>
+        </td>
+        <td class="${sCls}">${avgS.toFixed(4)}%</td>
+        <td style="color:#8b949e">${r.cycle_count}</td>
+        <td class="${chgC}">${chgS}</td>
+      </tr>`;
+  });
+}
+
+// ── 选中股票 ──
+function selectSym(sym) {
+  _selected = sym;
+  document.getElementById('detail-sym').textContent = sym;
+  renderSymTable();
+  fetchTimeseries(sym);
+  if (_tab === 'history') fetchHistory(sym);
+}
+
+// ── 获取时序数据 ──
+async function fetchTimeseries(sym) {
+  const date = document.getElementById('inp-date').value || todayStr();
+  try {
+    const r    = await fetch(`/api/volatility/timeseries?symbol=${sym}&date=${date}`);
+    const rows = await r.json();
+    drawChart(sym, rows);
+    renderStream(rows);
+  } catch (e) { console.error(e); }
+}
+
+// ── 绘制σ时序图 ──
+function drawChart(sym, rows) {
+  const canvas = document.getElementById('sigma-chart');
+  const ctx    = canvas.getContext('2d');
+  const W = canvas.parentElement.offsetWidth  - 24;
+  const H = canvas.parentElement.offsetHeight - 24;
+  canvas.width  = W;
+  canvas.height = H;
+
+  if (!rows.length) {
+    ctx.fillStyle = '#484f58';
+    ctx.font = '14px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.fillText('暂无数据', W/2, H/2);
+    return;
+  }
+
+  const PAD = { top: 30, right: 20, bottom: 40, left: 56 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top  - PAD.bottom;
+
+  const sigmas = rows.map(r => parseFloat(r.sigma_pct));
+  const prices = rows.map(r => parseFloat(r.c5));
+  const maxS   = Math.max(...sigmas) * 1.1 || 1;
+  const minP   = Math.min(...prices);
+  const maxP   = Math.max(...prices);
+  const rangeP = (maxP - minP) || 1;
+
+  // 背景
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  // 网格线
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth   = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = PAD.top + cH * (1 - i/4);
+    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W-PAD.right, y); ctx.stroke();
+    ctx.fillStyle = '#484f58';
+    ctx.font = '10px Consolas';
+    ctx.textAlign = 'right';
+    ctx.fillText((maxS * i/4).toFixed(2) + '%', PAD.left - 4, y + 3);
+  }
+
+  // σ 面积图
+  const n = rows.length;
+  ctx.beginPath();
+  rows.forEach((r, i) => {
+    const x = PAD.left + cW * i / (n-1 || 1);
+    const y = PAD.top  + cH * (1 - parseFloat(r.sigma_pct) / maxS);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  // 填充
+  const lastX = PAD.left + cW;
+  const grad = ctx.createLinearGradient(0, PAD.top, 0, PAD.top+cH);
+  grad.addColorStop(0, 'rgba(88,166,255,0.5)');
+  grad.addColorStop(1, 'rgba(88,166,255,0.02)');
+  ctx.lineTo(lastX, PAD.top + cH);
+  ctx.lineTo(PAD.left, PAD.top + cH);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // σ 折线
+  ctx.beginPath();
+  rows.forEach((r, i) => {
+    const x = PAD.left + cW * i / (n-1 || 1);
+    const y = PAD.top  + cH * (1 - parseFloat(r.sigma_pct) / maxS);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#58a6ff';
+  ctx.lineWidth   = 1.5;
+  ctx.stroke();
+
+  // 价格折线（右轴概念，叠加在同一区域）
+  if (rangeP > 0) {
+    ctx.beginPath();
+    rows.forEach((r, i) => {
+      const x = PAD.left + cW * i / (n-1 || 1);
+      const y = PAD.top  + cH * (1 - (parseFloat(r.c5) - minP) / rangeP);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = 'rgba(63,185,80,0.6)';
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([3,3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // X轴时间标签
+  const step = Math.max(1, Math.floor(n / 8));
+  ctx.fillStyle = '#484f58'; ctx.font = '10px Consolas'; ctx.textAlign = 'center';
+  rows.forEach((r, i) => {
+    if (i % step !== 0 && i !== n-1) return;
+    const x = PAD.left + cW * i / (n-1 || 1);
+    const t = new Date(r.cycle_end).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'});
+    ctx.fillText(t, x, H - PAD.bottom + 14);
+  });
+
+  // 标题
+  ctx.fillStyle = '#e6edf3'; ctx.font = 'bold 12px Segoe UI'; ctx.textAlign = 'left';
+  ctx.fillText(`${sym}  σ时序  (蓝=σ%  绿虚=价格)`, PAD.left, 18);
+
+  // 高亮最大σ点
+  const maxIdx = sigmas.indexOf(Math.max(...sigmas));
+  const mx = PAD.left + cW * maxIdx / (n-1 || 1);
+  const my = PAD.top  + cH * (1 - sigmas[maxIdx] / maxS);
+  ctx.beginPath();
+  ctx.arc(mx, my, 4, 0, Math.PI*2);
+  ctx.fillStyle = '#f85149';
+  ctx.fill();
+  ctx.fillStyle = '#f85149'; ctx.font = '10px Consolas'; ctx.textAlign = 'center';
+  ctx.fillText(sigmas[maxIdx].toFixed(4)+'%', mx, my - 8);
+}
+
+// ── 渲染记录流 ──
+function renderStream(rows) {
+  const tbody = document.getElementById('stream-tbody');
+  tbody.innerHTML = '';
+  [...rows].reverse().forEach(r => {
+    const t   = new Date(r.cycle_end).toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
+    const s   = parseFloat(r.sigma_pct);
+    const sc  = s >= 2 ? 'sigma-high' : s >= 1 ? 'sigma-medium' : 'sigma-low';
+    const pct = parseFloat(r.price_change_pct);
+    const pc  = isNaN(pct) ? '-' : (pct>=0?'+':'')+pct.toFixed(3)+'%';
+    const pcc = isNaN(pct) ? '' : pct>=0?'r-pos':'r-neg';
+    const rfmt = v => {
+      const f = parseFloat(v);
+      if (isNaN(f) || f===0) return '<span style="color:#484f58">0</span>';
+      return `<span class="${f>0?'r-pos':'r-neg'}">${f>0?'+':''}${f.toFixed(4)}</span>`;
+    };
+    tbody.innerHTML += `
+      <tr>
+        <td style="color:#8b949e">${t}</td>
+        <td class="${sc}">${s.toFixed(4)}%</td>
+        <td style="color:#c9d1d9">${parseFloat(r.c0||0).toFixed(4)}</td>
+        <td style="color:#c9d1d9">${parseFloat(r.c5||0).toFixed(4)}</td>
+        <td class="${pcc}">${pc}</td>
+        ${[r.r1,r.r2,r.r3,r.r4,r.r5].map(rfmt).map(v=>`<td>${v}</td>`).join('')}
+        <td style="color:#484f58">${r.total_vol||0}</td>
+      </tr>`;
+  });
+}
+
+// ── 获取历史数据 ──
+async function fetchHistory(sym) {
+  try {
+    const r    = await fetch(`/api/volatility/history?symbol=${sym}&days=10`);
+    const rows = await r.json();
+    renderHistory(rows);
+  } catch (e) { console.error(e); }
+}
+
+function renderHistory(rows) {
+  const grid = document.getElementById('hist-grid');
+  if (!rows.length) { grid.innerHTML = '<div class="empty">暂无历史数据</div>'; return; }
+  grid.innerHTML = rows.map(r => {
+    const maxS = parseFloat(r.max_sigma_pct);
+    const clr  = maxS >= 2 ? '#f85149' : maxS >= 1 ? '#e3b341' : '#3fb950';
+    return `
+      <div class="hist-card">
+        <div class="hdate">${r.trade_date}</div>
+        <div class="hval" style="color:${clr}">${maxS.toFixed(4)}%</div>
+        <div class="hmeta">
+          平均 ${parseFloat(r.avg_sigma_pct).toFixed(4)}%<br>
+          周期 ${r.cycle_count} 个 &nbsp;|&nbsp; 量 ${fmtVol(r.total_vol)}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ── Tab切换 ──
+function switchTab(name) {
+  _tab = name;
+  document.querySelectorAll('.tab-btn').forEach((b,i) => {
+    b.classList.toggle('active', ['chart','stream','history'][i] === name);
+  });
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  if (name === 'history' && _selected) fetchHistory(_selected);
+  if (name === 'chart'   && _selected) fetchTimeseries(_selected);
+}
+
+// ── 工具 ──
+function setStatus(msg) { document.getElementById('status-bar').textContent = msg; }
+
+function fmtVol(v) {
+  v = parseFloat(v);
+  if (v >= 1e6) return (v/1e6).toFixed(2)+'M';
+  if (v >= 1e3) return (v/1e3).toFixed(1)+'K';
+  return String(Math.round(v));
+}
+
+// 窗口 resize 重绘
+window.addEventListener('resize', () => {
+  if (_selected && _tab === 'chart') fetchTimeseries(_selected);
+});
+</script>
+</body>
+</html>
