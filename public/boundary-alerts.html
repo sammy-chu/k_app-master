@@ -285,6 +285,14 @@
             <input type="number" id="avgRangeMax" placeholder="最高" step="0.1" min="0">
           </div>
         </div>
+        <div class="filter-group" style="min-width: 180px;">
+          <label>屏蔽股票 (逗号分隔或回车)</label>
+          <div class="filter-row">
+            <input type="text" id="blockInput" placeholder="如 AAPL, TSLA" style="width: 120px; text-transform: uppercase;">
+            <button class="btn" onclick="addBlocked()">屏蔽</button>
+          </div>
+          <div class="filter-active-pills" id="blockedPills" style="margin-top: 6px; max-width: 220px;"></div>
+        </div>
         <div class="filter-actions">
           <button class="btn" onclick="clearFilters()">清空</button>
           <button class="btn primary" onclick="applyFilter()">筛选</button>
@@ -339,9 +347,51 @@ let sortDir    = -1;
 let maxVol     = 1;
 let countdown  = 10;
 let isFetching = false;
+let blockedStocks = JSON.parse(localStorage.getItem('boundaryBlockedStocks') || '[]');
 
 const SORT_KEYS = ['symbol','last_price','change_pct','total_volume','day_range','avg_range','winHigh','priceA','maxA','cycleVol','anchorTime'];
 const FILTER_IDS = ['priceMin','priceMax','volMin','volMax','dayRangeMin','dayRangeMax','avgRangeMin','avgRangeMax'];
+
+// ── BLOCKED STOCKS ────────────────────────────────────────────────────────
+function renderBlockedPills() {
+  const pills = document.getElementById('blockedPills');
+  if (!pills) return;
+  pills.innerHTML = blockedStocks.map(sym => 
+    `<span class="filter-pill" style="background:#ef53501a; border-color:#ef535044; color:#ef5350; display:flex; align-items:center;">
+      ${sym} <span style="cursor:pointer; margin-left:4px; font-weight:bold; font-size:12px;" onclick="removeBlocked('${sym}')">×</span>
+    </span>`
+  ).join('');
+}
+
+function addBlocked() {
+  const input = document.getElementById('blockInput');
+  if (!input) return;
+  const val = input.value.trim().toUpperCase();
+  if (!val) return;
+  
+  const symbols = val.split(/[,，\s]+/).map(s => s.trim()).filter(s => s);
+  let changed = false;
+  for (const sym of symbols) {
+    if (!blockedStocks.includes(sym)) {
+      blockedStocks.push(sym);
+      changed = true;
+    }
+  }
+  if (changed) {
+    localStorage.setItem('boundaryBlockedStocks', JSON.stringify(blockedStocks));
+    renderBlockedPills();
+    applyFilter();
+  }
+  input.value = '';
+}
+
+function removeBlocked(sym) {
+  blockedStocks = blockedStocks.filter(s => s !== sym);
+  localStorage.setItem('boundaryBlockedStocks', JSON.stringify(blockedStocks));
+  renderBlockedPills();
+  applyFilter();
+}
+
 
 // ── FILTER TOGGLE ─────────────────────────────────────────────────────────
 let filterOpen = false;
@@ -457,6 +507,8 @@ function applyFilter() {
   const avgRangeMax = getV('avgRangeMax');
 
   const filtered = allData.filter(row => {
+    if (blockedStocks.includes(row.symbol)) return false;
+    
     const price    = Number(row.last_price)  || 0;
     const vol      = Number(row.total_volume) || 0;
     const dayRange = Number(row.day_range)   || 0;
@@ -624,6 +676,17 @@ FILTER_IDS.forEach(id => {
   el.addEventListener('keydown', e => { if (e.key === 'Enter') applyFilter(); });
 });
 
+const blockInputEl = document.getElementById('blockInput');
+if (blockInputEl) {
+  blockInputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addBlocked();
+    }
+  });
+}
+
+renderBlockedPills();
 fetchData();
 </script>
 </body>
