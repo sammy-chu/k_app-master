@@ -109,6 +109,7 @@
         <a href="/stable-screener">稳定选股</a>
         <a href="/swing-screener">波段扫描</a>
         <a href="/oscillator-screener">震荡选股</a>
+    <a href="/boundary-alerts">边界预警</a>
     </div>
 
     <div class="header-bar">
@@ -453,6 +454,10 @@
             const p      = Number(item.last_price);
             const pct    = Math.abs(Number(item.change_pct));
             const chgAmt = Math.abs(Number(item.change_amount));
+            const vol    = Number(item.total_volume);
+
+            // 过滤成交量为0的股票
+            if (!vol || vol <= 0) return false;
 
             if (p < minPrice || p > maxPrice) return false;
             if (filter5Pct && pct <= 5) return false;

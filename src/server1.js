@@ -371,12 +371,6 @@ let price30mLastUpdate = 0;
 // 稳定选股历史快照：symbol -> [{ time, r1_val, r2_vol, r3_pct, r4_pct, r5_cnt, last_price, change_pct }, ...]
 const stableHistory = new Map();
 
-// 边界预警状态表：symbol -> alertState
-// alertState: { symbol, anchorTime, expireAt, triggerType, maxA, maxB,
-//               upgraded, pinnedUntil, priceA, priceB,
-//               winHigh, winLow, cycleVol, lastPrice }
-const boundaryAlertMap = new Map();
-
 // 实时盘口缓存：symbol -> { bid: [{price, vol}, ...], ask: [{price, vol}, ...], receivedAt }
 // 最多保留 L1/L2/L3 三档，每10秒增量刷新
 const orderBookCache = new Map();
@@ -943,180 +937,8 @@ async function pruneStableSnapshot() {
   }
 }
 
-// === 边界预警扫描 ===
-// 每10秒执行，基于 window10m 滚动窗口最近7根K线
-// 逻辑：首次触发后锚定，保留7分钟，期间持续追踪升级
-function scanBoundaryAlerts() {
-  const now = new Date();
-  const bj  = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
-  const h = bj.getHours(), m = bj.getMinutes();
-  if (h < 8 || h >= 17) return;
-
-  // ① 清理过期预警
-  for (const [symbol, state] of boundaryAlertMap) {
-    if (now >= state.expireAt) {
-      boundaryAlertMap.delete(symbol);
-    }
-  }
-
-  // ② 扫描所有 symbol
-  for (const row of rankingCache) {
-    const symbol = row.symbol;
-    const allBars = window10m.get(symbol);
-    if (!allBars || allBars.length === 0) continue;
-
-    // 取最近7根
-    const bars = allBars.slice(-7);
-
-    // 计算窗口极值
-    const winHigh = Math.max(...bars.map(b => b.high));
-    const winLow  = Math.min(...bars.map(b => b.low));
-    const r6Range = winHigh - winLow;
-    if (r6Range <= 0) continue;
-
-    // 预警价
-    const priceA = winLow  + r6Range * 0.1;
-    const priceB = winLow  + r6Range * 0.9;
-
-    // 0.15 元绝对值约束
-    if ((priceA - winLow)  >= 0.15) continue;
-    if ((winHigh - priceB) >= 0.15) continue;
-
-    // 周期成交量 > 100 股
-    const cycleVol = bars.reduce((s, b) => s + b.volume, 0);
-    if (cycleVol <= 100) continue;
-
-    // 统计触碰次数
-    const a = bars.filter(b => b.low  < priceA).length;
-    const b = bars.filter(b => b.high > priceB).length;
-
-    const existing = boundaryAlertMap.get(symbol);
-
-    if (existing) {
-      // ── 已有活跃预警：更新最大值，检查升级 ──
-      existing.maxA = Math.max(existing.maxA, a);
-      existing.maxB = Math.max(existing.maxB, b);
-
-      if (!existing.upgraded) {
-        const shouldUpgrade =
-          (existing.triggerType === '3a' && (existing.maxA >= 4 || existing.maxB >= 3)) ||
-          (existing.triggerType === '3b' && (existing.maxB >= 4 || existing.maxA >= 3));
-
-        if (shouldUpgrade) {
-          existing.upgraded    = true;
-          existing.pinnedUntil = new Date(now.getTime() + 3 * 60 * 1000);
-        }
-      }
-    } else {
-      // ── 无活跃预警：检查是否首次触发 ──
-      if (a < 3 && b < 3) continue;
-
-      boundaryAlertMap.set(symbol, {
-        symbol,
-        anchorTime:   now,
-        expireAt:     new Date(now.getTime() + 7 * 60 * 1000),
-        triggerType:  a >= 3 ? '3a' : '3b',
-        maxA:         a,
-        maxB:         b,
-        upgraded:     false,
-        pinnedUntil:  null,
-        priceA,
-        priceB,
-        winHigh,
-        winLow,
-        cycleVol,
-        lastPrice:    Number(row.last_price),
-      });
-    }
-  }
-}
-
 app.get('/health', (req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
-});
-
-// === 边界预警列表 API ===
-// 前端筛选：price_min/max, vol_min/max, day_range_min/max, avg_range_min/max
-app.get('/api/boundary-alerts', (req, res) => {
-  try {
-    const q = req.query;
-    const priceMin    = q.price_min    !== undefined && q.price_min    !== '' ? Number(q.price_min)    : null;
-    const priceMax    = q.price_max    !== undefined && q.price_max    !== '' ? Number(q.price_max)    : null;
-    const volMin      = q.vol_min      !== undefined && q.vol_min      !== '' ? Number(q.vol_min)      : null;
-    const volMax      = q.vol_max      !== undefined && q.vol_max      !== '' ? Number(q.vol_max)      : null;
-    const dayRangeMin = q.day_range_min !== undefined && q.day_range_min !== '' ? Number(q.day_range_min) : null;
-    const dayRangeMax = q.day_range_max !== undefined && q.day_range_max !== '' ? Number(q.day_range_max) : null;
-    const avgRangeMin = q.avg_range_min !== undefined && q.avg_range_min !== '' ? Number(q.avg_range_min) : null;
-    const avgRangeMax = q.avg_range_max !== undefined && q.avg_range_max !== '' ? Number(q.avg_range_max) : null;
-
-    const now = new Date();
-
-    // 从 rankingCache 建立快速查询 map
-    const rankingMap = new Map();
-    for (const row of rankingCache) {
-      rankingMap.set(row.symbol, row);
-    }
-
-    const results = [];
-    for (const [symbol, state] of boundaryAlertMap) {
-      const row = rankingMap.get(symbol);
-      if (!row) continue;
-
-      const lastPrice = Number(row.last_price) || 0;
-      const totalVol  = Number(row.total_volume) || 0;
-      const highPrice = Number(row.high_price) || 0;
-      const lowPrice  = Number(row.low_price)  || 0;
-      const dayRange  = highPrice - lowPrice;
-      const avgRange  = dailyRangeCache.get(symbol) || null;
-
-      // 前端筛选
-      if (priceMin    !== null && lastPrice < priceMin)    continue;
-      if (priceMax    !== null && lastPrice > priceMax)    continue;
-      if (volMin      !== null && totalVol  < volMin)      continue;
-      if (volMax      !== null && totalVol  > volMax)      continue;
-      if (dayRangeMin !== null && dayRange  < dayRangeMin) continue;
-      if (dayRangeMax !== null && dayRange  > dayRangeMax) continue;
-      if (avgRangeMin !== null && (avgRange === null || avgRange < avgRangeMin)) continue;
-      if (avgRangeMax !== null && (avgRange === null || avgRange > avgRangeMax)) continue;
-
-      const isPinned = state.pinnedUntil !== null && now < state.pinnedUntil;
-
-      results.push({
-        symbol,
-        triggerType:  state.triggerType,
-        maxA:         state.maxA,
-        maxB:         state.maxB,
-        priceA:       Number(state.priceA.toFixed(4)),
-        priceB:       Number(state.priceB.toFixed(4)),
-        winHigh:      state.winHigh,
-        winLow:       state.winLow,
-        cycleVol:     state.cycleVol,
-        anchorTime:   state.anchorTime.toISOString(),
-        expireAt:     state.expireAt.toISOString(),
-        isPinned,
-        pinnedUntil:  state.pinnedUntil ? state.pinnedUntil.toISOString() : null,
-        // rankingCache 字段
-        last_price:   lastPrice,
-        total_volume: totalVol,
-        high_price:   highPrice,
-        low_price:    lowPrice,
-        day_range:    Number(dayRange.toFixed(4)),
-        avg_range:    avgRange,
-        change_pct:   Number(row.change_pct),
-      });
-    }
-
-    // 排序：置顶优先，其次按 anchorTime 降序（新在上）
-    results.sort((a, b) => {
-      if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
-      return new Date(b.anchorTime) - new Date(a.anchorTime);
-    });
-
-    res.json({ count: results.length, alerts: results });
-  } catch (e) {
-    console.error('[BoundaryAlerts] API error:', e.message);
-    res.status(500).json({ error: 'boundary_alerts_failed' });
-  }
 });
 
 // 轻量级价格快照 API
@@ -3199,13 +3021,6 @@ function startAlertMonitor() {
   updateWindow10m();
   runScan('Window10m', updateWindow10m, 10000);
 
-  // ── t=12s：BoundaryAlerts（纯内存，10s，在 Window10m 刷新后执行）──────────
-  setTimeout(() => {
-    console.log(`[BoundaryAlerts] starting, interval=10s`);
-    scanBoundaryAlerts();
-    runScan('BoundaryAlerts', scanBoundaryAlerts, 10000);
-  }, 12000);
-
   // ── t=5s：Window30m（pricePool，延迟5s避开 Window10m 启动瞬间）────────────
   setTimeout(() => {
     console.log(`[Window30m] starting, interval=10s`);
@@ -3298,7 +3113,6 @@ function startAlertMonitor() {
     if (h === 7 && m === 55 && lastHistoryClearDate !== todayStr) {
       lastHistoryClearDate = todayStr;
       stableHistory.clear();
-      boundaryAlertMap.clear();
       window30m.clear();
       window30mLastBucket = null;
       price30mCache.clear();
@@ -3449,7 +3263,6 @@ app.get('/swing-screener',  (req, res) => res.sendFile(path.join(__dirname, '../
 app.get('/screener',        (req, res) => res.sendFile(path.join(__dirname, '../public/screener.html')));
 app.get('/stable-screener', (req, res) => res.sendFile(path.join(__dirname, '../public/screener-stable.html')));
 app.get('/oscillator-screener', (req, res) => res.sendFile(path.join(__dirname, '../public/screener-oscillator.html')));
-app.get('/boundary-alerts',     (req, res) => res.sendFile(path.join(__dirname, '../public/boundary-alerts.html')));
 app.get('/volatility',          (req, res) => res.sendFile(path.join(__dirname, '../public/volatility.html')));
 
 ensureTables().then(() => {

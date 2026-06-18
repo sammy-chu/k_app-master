@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>震荡筛选器</title>
+<title>边界预警</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -63,7 +63,7 @@
     overflow: hidden; max-height: 0; opacity: 0;
     transition: max-height 0.25s ease, opacity 0.2s ease;
   }
-  .filter-body.open { max-height: 220px; opacity: 1; }
+  .filter-body.open { max-height: 180px; opacity: 1; }
   .filter-panel {
     background: #2a2a2a; padding: 12px 16px 14px;
     border-radius: 0 0 6px 6px; border-top: 1px solid #333;
@@ -97,54 +97,6 @@
   .btn.primary { border-color: #007acc; color: #7ac0f0; background: #007acc18; }
   .btn.primary:hover { background: #007acc30; }
 
-  /* ── 代码查询框 ── */
-  .lookup-panel {
-    background: #222; border: 1px solid #333; border-radius: 6px;
-    margin-bottom: 14px; padding: 12px 16px;
-  }
-  .lookup-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .lookup-row label { font-size: 12px; color: #888; white-space: nowrap; }
-  #symbolInput { width: 130px; font-size: 14px; font-weight: bold; text-transform: uppercase; }
-  .lookup-result {
-    margin-top: 10px; display: none;
-    background: #1a1a1a; border: 1px solid #333; border-radius: 4px;
-    padding: 12px 14px;
-  }
-  .lookup-result.show { display: block; }
-  .lookup-sym { font-size: 16px; font-weight: bold; color: #fff; margin-bottom: 10px; }
-  .lookup-sym span { font-size: 12px; font-weight: normal; margin-left: 10px; }
-
-  /* ── 窗口详情卡片 ── */
-  .win-grid {
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
-  }
-  .win-card {
-    background: #252525; border-radius: 4px; padding: 10px 12px;
-    border-left: 3px solid #333;
-  }
-  .win-card.triggered { border-left-color: #26a69a; }
-  .win-card.not-triggered { border-left-color: #444; opacity: 0.55; }
-  .win-card-title {
-    font-size: 11px; color: #666; margin-bottom: 6px;
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  .win-badge {
-    font-size: 10px; padding: 1px 6px; border-radius: 2px;
-    background: #26a69a18; border: 1px solid #26a69a44; color: #26a69a;
-  }
-  .win-badge.no { background: #33333318; border-color: #444; color: #555; }
-  .win-stats { display: flex; flex-direction: column; gap: 3px; }
-  .win-stat { font-size: 12px; color: #888; display: flex; justify-content: space-between; }
-  .win-stat span { color: #bbb; }
-  .win-stat span.pass { color: #26a69a; }
-  .win-stat span.fail { color: #ef5350; }
-  .win-pattern {
-    margin-top: 6px; font-size: 11px;
-    padding: 2px 8px; border-radius: 3px; display: inline-block;
-    background: #26a69a18; border: 1px solid #26a69a33; color: #26a69a;
-  }
-  .win-pattern.no { background: transparent; border: none; color: #444; }
-
   /* ── 状态栏 ── */
   .status-bar {
     display: flex; align-items: center; justify-content: space-between;
@@ -153,7 +105,7 @@
   .rule-summary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .rule-tag {
     padding: 2px 8px; border-radius: 3px; font-size: 11px;
-    border: 1px solid #26a69a44; color: #26a69a; background: #26a69a0a;
+    border: 1px solid #ffa72644; color: #ffa726; background: #ffa7260a;
   }
 
   /* ── 表格 ── */
@@ -171,7 +123,7 @@
   th.sort-asc::after  { content: ' ↑'; color: #007acc; }
   th.sort-desc::after { content: ' ↓'; color: #007acc; }
   th:first-child, td:first-child { text-align: left; padding-left: 14px; }
-  tr:hover { background-color: #2a2a2a; }
+  tr:hover td { background-color: #2a2a2a; }
 
   .sym { font-weight: bold; color: #fff; font-size: 14px; cursor: pointer; }
   .sym:hover { color: #7ac0f0; text-decoration: underline; }
@@ -179,15 +131,65 @@
   .down { color: #ef5350; }
   .flat { color: #888; }
 
-  /* ── 触发窗口徽标 ── */
-  .win-tags { display: flex; gap: 3px; justify-content: flex-end; flex-wrap: wrap; }
-  .win-tag {
-    font-size: 10px; padding: 1px 5px; border-radius: 2px;
-    background: #26a69a18; border: 1px solid #26a69a44; color: #26a69a;
-    white-space: nowrap;
+  /* ── 触发类型徽标 ── */
+  .trigger-badge {
+    display: inline-block; font-size: 11px; padding: 1px 7px;
+    border-radius: 3px; font-weight: bold; margin-left: 4px;
+    vertical-align: middle;
   }
-  .win-tag.aba { border-color: #26a69a66; }
-  .win-tag.bab { border-color: #ffd54f66; color: #ffd54f; background: #ffd54f18; }
+  .trigger-3a {
+    background: #26a69a18; border: 1px solid #26a69a55; color: #26a69a;
+  }
+  .trigger-3b {
+    background: #ffa72618; border: 1px solid #ffa72655; color: #ffa726;
+  }
+  .trigger-3a-up {
+    background: #26a69a30; border: 1px solid #26a69a88; color: #4dd0c4;
+  }
+  .trigger-3b-up {
+    background: #ffa72630; border: 1px solid #ffa72688; color: #ffcc02;
+  }
+
+  /* ── 置顶闪烁行 ── */
+  @keyframes flash-row {
+    0%, 100% { background-color: transparent; }
+    50%       { background-color: #ffa72610; }
+  }
+  tr.pinned td { font-weight: 500; }
+  tr.pinned { animation: flash-row 1.2s ease-in-out infinite; border-left: 2px solid #ffa726; }
+  .pin-badge {
+    font-size: 10px; padding: 1px 5px; border-radius: 2px;
+    background: #ffa72622; border: 1px solid #ffa72655;
+    color: #ffa726; margin-left: 5px; vertical-align: middle;
+  }
+
+  /* ── 倒计时进度条 ── */
+  .expire-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .expire-time { font-size: 12px; color: #888; }
+  .expire-bar { width: 48px; height: 3px; background: #333; border-radius: 2px; overflow: hidden; }
+  .expire-bar-fill { height: 100%; border-radius: 2px; transition: width 1s linear; }
+  .expire-bar-fill.fresh  { background: #26a69a; }
+  .expire-bar-fill.mid    { background: #ffa726; }
+  .expire-bar-fill.ending { background: #ef5350; }
+
+  /* ── A/B 价格条 ── */
+  .ab-cell {
+    display: flex; flex-direction: column; align-items: flex-end;
+    gap: 1px; font-size: 12px;
+  }
+  .ab-a { color: #26a69a; }
+  .ab-b { color: #ffa726; }
+
+  /* ── 计数胶囊 ── */
+  .count-cell { display: flex; justify-content: flex-end; gap: 5px; }
+  .cnt {
+    font-size: 11px; padding: 1px 6px; border-radius: 3px;
+    font-weight: bold;
+  }
+  .cnt-a { background: #26a69a18; border: 1px solid #26a69a44; color: #26a69a; }
+  .cnt-b { background: #ffa72618; border: 1px solid #ffa72644; color: #ffa726; }
+  .cnt-a.hi { background: #26a69a35; border-color: #26a69a88; color: #4dd0c4; }
+  .cnt-b.hi { background: #ffa72635; border-color: #ffa72888; color: #ffcc02; }
 
   /* vol bar */
   .vol-cell { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
@@ -206,7 +208,6 @@
   @media (max-width: 900px) {
     .filter-panel { gap: 10px; }
     .header-bar { flex-direction: column; align-items: flex-start; gap: 8px; }
-    .win-grid { grid-template-columns: repeat(2, 1fr); }
   }
 </style>
 </head>
@@ -224,14 +225,14 @@
     <a href="/screener">选股器</a>
     <a href="/swing-screener">波段扫描</a>
     <a href="/stable-screener">稳定选股</a>
-    <a href="/oscillator-screener" class="active">震荡筛选</a>
-    <a href="/boundary-alerts">边界预警</a>
+    <a href="/oscillator-screener">震荡筛选</a>
+    <a href="/boundary-alerts" class="active">边界预警</a>
   </div>
 
   <!-- 标题栏 -->
   <div class="header-bar">
-    <h1 class="title">震荡筛选器
-      <span style="font-size:0.6em;color:#555;margin-left:8px;">15/20/25/30分钟窗口 · A-B-A 或 B-A-B 模式</span>
+    <h1 class="title">边界预警
+      <span style="font-size:0.6em;color:#555;margin-left:8px;">7分钟滚动窗口 · 边界高频试探 · 主力试盘捕捉</span>
     </h1>
     <div class="header-right">
       <span id="status-text" style="font-size:12px;color:#888;">
@@ -261,33 +262,27 @@
           </div>
         </div>
         <div class="filter-group">
-          <label>涨跌幅绝对值 %</label>
-          <div class="filter-row">
-            <input type="number" id="changeMin" placeholder="最低" step="0.1" min="0">
-            <span class="filter-sep">—</span>
-            <input type="number" id="changeMax" placeholder="最高" step="0.1" min="0">
-          </div>
-        </div>
-        <div class="filter-group">
-          <label>涨跌额绝对值</label>
-          <div class="filter-row">
-            <input type="number" id="changeAmtMin" placeholder="最低" step="0.01" min="0">
-            <span class="filter-sep">—</span>
-            <input type="number" id="changeAmtMax" placeholder="最高" step="0.01" min="0">
-          </div>
-        </div>
-        <div class="filter-group">
           <label>今日成交量</label>
           <div class="filter-row">
             <input type="number" id="volMin" placeholder="最低" step="1000" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="volMax" placeholder="最高" step="1000" min="0">
           </div>
         </div>
         <div class="filter-group">
-          <label>5日振幅区间</label>
+          <label>当日波动区间</label>
           <div class="filter-row">
-            <input type="number" id="rangeMin" placeholder="最低" step="0.1" min="0">
+            <input type="number" id="dayRangeMin" placeholder="最低" step="0.1" min="0">
             <span class="filter-sep">—</span>
-            <input type="number" id="rangeMax" placeholder="最高" step="0.1" min="0">
+            <input type="number" id="dayRangeMax" placeholder="最高" step="0.1" min="0">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label>十日波动均值</label>
+          <div class="filter-row">
+            <input type="number" id="avgRangeMin" placeholder="最低" step="0.1" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="avgRangeMax" placeholder="最高" step="0.1" min="0">
           </div>
         </div>
         <div class="filter-actions">
@@ -298,25 +293,15 @@
     </div>
   </div>
 
-  <!-- 代码查询面板 -->
-  <div class="lookup-panel">
-    <div class="lookup-row">
-      <label>查询单只股票窗口详情</label>
-      <input type="text" id="symbolInput" placeholder="输入代码" maxlength="20"
-             oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter')handleLookup()">
-      <button class="btn" onclick="handleLookup()">查询</button>
-      <button class="btn" onclick="clearLookup()" style="color:#555;border-color:#333;">清除</button>
-    </div>
-    <div class="lookup-result" id="lookupResult"></div>
-  </div>
-
   <!-- 状态栏 -->
   <div class="status-bar">
     <div class="rule-summary">
-      <span class="rule-tag">量 ≥ 310 股</span>
-      <span class="rule-tag">窗口高低差 ≥ 0.05</span>
-      <span class="rule-tag">触A ≥ 2 · 触B ≥ 2 · 合计 ≥ 5</span>
-      <span class="rule-tag">A→B→A 或 B→A→B</span>
+      <span class="rule-tag">7分钟滚动窗口</span>
+      <span class="rule-tag">A = 低点 + 振幅 × 10%</span>
+      <span class="rule-tag">B = 低点 + 振幅 × 90%</span>
+      <span class="rule-tag">绝对约束 &lt; 0.15元</span>
+      <span class="rule-tag">周期成交 &gt; 100股</span>
+      <span class="rule-tag">触碰 ≥ 3次预警 · 升级置顶闪烁3分钟</span>
     </div>
     <span id="count-info">—</span>
   </div>
@@ -328,17 +313,18 @@
         <th onclick="sortBy('symbol')">代码</th>
         <th onclick="sortBy('last_price')">现价</th>
         <th onclick="sortBy('change_pct')" class="sort-desc">涨跌%</th>
-        <th onclick="sortBy('change_amount')">涨跌额</th>
         <th onclick="sortBy('total_volume')">今日量</th>
-        <th onclick="sortBy('vol_ratio')">量比</th>
-        <th onclick="sortBy('bars_count')">K线数</th>
-        <th onclick="sortBy('triggered_count')" title="触发的窗口数量">触发窗口</th>
-        <th onclick="sortBy('avg_5day_range')" title="近5个历史交易日(最高价-最低价)均值">5日振幅</th>
-        <th title="各窗口触发情况，ABA/BAB为模式类型">窗口详情</th>
+        <th onclick="sortBy('day_range')">当日波动</th>
+        <th onclick="sortBy('avg_range')">10日均波动</th>
+        <th onclick="sortBy('winHigh')" title="7分钟窗口高低点">窗口高/低</th>
+        <th onclick="sortBy('priceA')" title="预警价A（下轨10%）和B（上轨90%）">A价 / B价</th>
+        <th onclick="sortBy('maxA')" title="周期内触碰下轨(a)和上轨(b)的K线数">触碰次数</th>
+        <th onclick="sortBy('cycleVol')" title="7分钟周期内成交量">周期量</th>
+        <th onclick="sortBy('anchorTime')" title="首次触发时间及到期倒计时">触发 / 剩余</th>
       </tr>
     </thead>
     <tbody id="tbody">
-      <tr class="empty-row"><td colspan="10"><span class="spinner"></span>加载中...</td></tr>
+      <tr class="empty-row"><td colspan="11"><span class="spinner"></span>加载中...</td></tr>
     </tbody>
   </table>
 
@@ -348,15 +334,14 @@
 // ── STATE ─────────────────────────────────────────────────────────────────
 let allData    = [];
 let sortedData = [];
-let sortKey    = 'change_pct';
+let sortKey    = 'anchorTime';
 let sortDir    = -1;
 let maxVol     = 1;
 let countdown  = 10;
 let isFetching = false;
 
-const WINDOWS = [15, 20, 25, 30];
-const SORT_KEYS = ['symbol','last_price','change_pct','change_amount','total_volume','vol_ratio','bars_count','triggered_count','avg_5day_range','_windows'];
-const FILTER_IDS = ['priceMin','priceMax','changeMin','changeMax','changeAmtMin','changeAmtMax','volMin','rangeMin','rangeMax'];
+const SORT_KEYS = ['symbol','last_price','change_pct','total_volume','day_range','avg_range','winHigh','priceA','maxA','cycleVol','anchorTime'];
+const FILTER_IDS = ['priceMin','priceMax','volMin','volMax','dayRangeMin','dayRangeMax','avgRangeMin','avgRangeMax'];
 
 // ── FILTER TOGGLE ─────────────────────────────────────────────────────────
 let filterOpen = false;
@@ -378,18 +363,17 @@ function updateHighlights() {
   });
   const pairs = [
     ['priceMin','priceMax','价格'],
-    ['changeMin','changeMax','涨跌%'],
-    ['changeAmtMin','changeAmtMax','涨跌额'],
-    ['volMin',null,'今日量'],
-    ['rangeMin','rangeMax','5日振幅'],
+    ['volMin','volMax','成交量'],
+    ['dayRangeMin','dayRangeMax','当日波动'],
+    ['avgRangeMin','avgRangeMax','10日均波动'],
   ];
   const pills = document.getElementById('filterPills');
   if (!pills) return;
   pills.innerHTML = pairs
-    .filter(([a, b]) => document.getElementById(a)?.value.trim() || (b && document.getElementById(b)?.value.trim()))
+    .filter(([a, b]) => document.getElementById(a)?.value.trim() || document.getElementById(b)?.value.trim())
     .map(([a, b, label]) => {
       const va = document.getElementById(a)?.value.trim();
-      const vb = b ? document.getElementById(b)?.value.trim() : null;
+      const vb = document.getElementById(b)?.value.trim();
       const range = va && vb ? `${va}–${vb}` : va ? `≥${va}` : `≤${vb}`;
       return `<span class="filter-pill">${label} ${range}</span>`;
     }).join('');
@@ -421,36 +405,35 @@ async function fetchData() {
   const dot  = document.getElementById('status-dot');
   const stxt = document.getElementById('status-text');
   try {
-    const priceMin  = getV('priceMin');
-    const priceMax  = getV('priceMax');
-    const changeMin = getV('changeMin');
-    const changeMax = getV('changeMax');
-    const changeAmtMin = getV('changeAmtMin');
-    const changeAmtMax = getV('changeAmtMax');
-    const volMin    = getV('volMin');
     const params = {};
-    if (priceMin  !== null) params.price_min  = priceMin;
-    if (priceMax  !== null) params.price_max  = priceMax;
-    if (changeMin !== null) params.change_min = changeMin;
-    if (changeMax !== null) params.change_max = changeMax;
-    if (changeAmtMin !== null) params.change_amt_min = changeAmtMin;
-    if (changeAmtMax !== null) params.change_amt_max = changeAmtMax;
-    if (volMin    !== null) params.vol_min    = volMin;
+    const priceMin    = getV('priceMin');
+    const priceMax    = getV('priceMax');
+    const volMin      = getV('volMin');
+    const volMax      = getV('volMax');
+    const dayRangeMin = getV('dayRangeMin');
+    const dayRangeMax = getV('dayRangeMax');
+    const avgRangeMin = getV('avgRangeMin');
+    const avgRangeMax = getV('avgRangeMax');
+    if (priceMin    !== null) params.price_min     = priceMin;
+    if (priceMax    !== null) params.price_max     = priceMax;
+    if (volMin      !== null) params.vol_min       = volMin;
+    if (volMax      !== null) params.vol_max       = volMax;
+    if (dayRangeMin !== null) params.day_range_min = dayRangeMin;
+    if (dayRangeMax !== null) params.day_range_max = dayRangeMax;
+    if (avgRangeMin !== null) params.avg_range_min = avgRangeMin;
+    if (avgRangeMax !== null) params.avg_range_max = avgRangeMax;
+
     const qs = Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-    const res = await fetch(`/api/screener-oscillator${qs ? '?'+qs : ''}`);
+    const res = await fetch(`/api/boundary-alerts${qs ? '?'+qs : ''}`);
     if (!res.ok) throw new Error(res.status);
-    allData = await res.json();
-    // 预处理：给每行加 triggered_count
-    allData = allData.map(row => {
-      const triggered_count = WINDOWS.filter(w => row.windows?.[w]?.triggered).length;
-      return { ...row, triggered_count };
-    });
-    maxVol = allData.reduce((m, r) => Math.max(m, Number(r.total_volume)||0), 1);
+    const json = await res.json();
+    allData = json.alerts || [];
+    maxVol  = allData.reduce((m, r) => Math.max(m, Number(r.total_volume)||0), 1);
+
     if (dot) dot.className = 'status-dot live';
     if (stxt) stxt.innerHTML = `<span class="status-dot live"></span>实时 · ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;
+
     applyFilter();
-    const sym = document.getElementById('symbolInput').value.trim().toUpperCase();
-    if (sym) renderLookup(sym);
   } catch(e) {
     if (dot) dot.className = 'status-dot error';
     if (stxt) stxt.innerHTML = `<span class="status-dot error"></span>连接失败`;
@@ -460,45 +443,55 @@ async function fetchData() {
   }
 }
 
-// ── APPLY FILTER ──────────────────────────────────────────────────────────
+// ── APPLY FILTER & SORT ───────────────────────────────────────────────────
 function applyFilter() {
   updateHighlights();
-  const priceMin  = getV('priceMin');
-  const priceMax  = getV('priceMax');
-  const changeMin = getV('changeMin');
-  const changeMax = getV('changeMax');
-  const changeAmtMin = getV('changeAmtMin');
-  const changeAmtMax = getV('changeAmtMax');
-  const volMin    = getV('volMin');
-  const rangeMin  = getV('rangeMin');
-  const rangeMax  = getV('rangeMax');
+  // 前端二次筛选（API 已过滤，这里处理实时输入联动）
+  const priceMin    = getV('priceMin');
+  const priceMax    = getV('priceMax');
+  const volMin      = getV('volMin');
+  const volMax      = getV('volMax');
+  const dayRangeMin = getV('dayRangeMin');
+  const dayRangeMax = getV('dayRangeMax');
+  const avgRangeMin = getV('avgRangeMin');
+  const avgRangeMax = getV('avgRangeMax');
 
   const filtered = allData.filter(row => {
-    const price = Number(row.last_price)   || 0;
-    const pct   = Math.abs(Number(row.change_pct) || 0);
-    const amt   = Math.abs(Number(row.change_amount) || 0);
-    const vol   = Number(row.total_volume) || 0;
-    if (priceMin  !== null && price < priceMin)  return false;
-    if (priceMax  !== null && price > priceMax)  return false;
-    if (changeMin !== null && pct   < changeMin) return false;
-    if (changeMax !== null && pct   > changeMax) return false;
-    if (changeAmtMin !== null && amt < changeAmtMin) return false;
-    if (changeAmtMax !== null && amt > changeAmtMax) return false;
-    if (volMin    !== null && vol   < volMin)    return false;
-    const avgRange = row.avg_5day_range != null ? Number(row.avg_5day_range) : null;
-    if (rangeMin !== null && (avgRange === null || avgRange < rangeMin)) return false;
-    if (rangeMax !== null && (avgRange === null || avgRange > rangeMax)) return false;
+    const price    = Number(row.last_price)  || 0;
+    const vol      = Number(row.total_volume) || 0;
+    const dayRange = Number(row.day_range)   || 0;
+    const avgRange = row.avg_range != null ? Number(row.avg_range) : null;
+    if (priceMin    !== null && price    < priceMin)    return false;
+    if (priceMax    !== null && price    > priceMax)    return false;
+    if (volMin      !== null && vol      < volMin)      return false;
+    if (volMax      !== null && vol      > volMax)      return false;
+    if (dayRangeMin !== null && dayRange < dayRangeMin) return false;
+    if (dayRangeMax !== null && dayRange > dayRangeMax) return false;
+    if (avgRangeMin !== null && (avgRange === null || avgRange < avgRangeMin)) return false;
+    if (avgRangeMax !== null && (avgRange === null || avgRange > avgRangeMax)) return false;
     return true;
   });
 
+  // 置顶行永远排最前，然后按 sortKey
   sortedData = [...filtered].sort((a, b) => {
-    const va = sortKey === 'symbol' ? a[sortKey] : (Number(a[sortKey]) ?? -Infinity);
-    const vb = sortKey === 'symbol' ? b[sortKey] : (Number(b[sortKey]) ?? -Infinity);
+    if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+    const va = sortKey === 'symbol'
+      ? a[sortKey]
+      : sortKey === 'anchorTime'
+        ? new Date(a.anchorTime).getTime()
+        : (Number(a[sortKey]) ?? -Infinity);
+    const vb = sortKey === 'symbol'
+      ? b[sortKey]
+      : sortKey === 'anchorTime'
+        ? new Date(b.anchorTime).getTime()
+        : (Number(b[sortKey]) ?? -Infinity);
     return va < vb ? sortDir : va > vb ? -sortDir : 0;
   });
 
+  const pinnedCount = sortedData.filter(r => r.isPinned).length;
   document.getElementById('count-info').textContent =
-    `触发 ${allData.length} 只 · 当前显示 ${sortedData.length} 只`;
+    `预警 ${allData.length} 只 · 显示 ${sortedData.length} 只` +
+    (pinnedCount ? ` · 置顶闪烁 ${pinnedCount} 只` : '');
 
   renderTable();
 }
@@ -507,13 +500,11 @@ function applyFilter() {
 function renderTable() {
   const tbody = document.getElementById('tbody');
   if (sortedData.length === 0) {
-    const msg = allData.length === 0
-      ? '<span class="spinner"></span>加载中...'
-      : '暂无符合条件的股票';
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="10">${msg}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">暂无预警</td></tr>`;
     return;
   }
 
+  const now = Date.now();
   const existingRows = {};
   for (const tr of tbody.querySelectorAll('tr[data-sym]')) {
     existingRows[tr.dataset.sym] = tr;
@@ -521,119 +512,83 @@ function renderTable() {
 
   let ci = 0;
   for (const row of sortedData) {
-    const html = buildRowHTML(row);
+    const html = buildRowHTML(row, now);
     let tr = existingRows[row.symbol];
     if (!tr) { tr = document.createElement('tr'); tr.dataset.sym = row.symbol; }
     if (tr._lastHtml !== html) { tr.innerHTML = html; tr._lastHtml = html; }
+    tr.className = row.isPinned ? 'pinned' : '';
     if (tbody.children[ci] !== tr) tbody.insertBefore(tr, tbody.children[ci] || null);
     ci++;
   }
   while (tbody.children.length > sortedData.length) tbody.removeChild(tbody.lastChild);
 }
 
-function buildRowHTML(r) {
+function buildRowHTML(r, now) {
   const pct  = Number(r.change_pct);
   const pcls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
   const sign = pct > 0 ? '+' : '';
   const vol  = Number(r.total_volume) || 0;
   const vPct = Math.min(100, maxVol > 0 ? vol / maxVol * 100 : 0);
-  const vr   = Number(r.vol_ratio) || 0;
 
-  // 触发窗口徽标
-  const winTags = WINDOWS
-    .filter(w => r.windows?.[w]?.triggered)
-    .map(w => {
-      const pat = r.windows[w].matchedPattern || '';
-      const cls = pat === 'BAB' ? 'bab' : 'aba';
-      return `<span class="win-tag ${cls}">${w}m ${pat}</span>`;
-    }).join('');
+  // 触发类型徽标
+  const isUpgraded = r.isPinned || (r.triggerType === '3a' && r.maxA >= 4) ||
+                     (r.triggerType === '3b' && r.maxB >= 4);
+  const triggerClass = r.triggerType === '3a'
+    ? (isUpgraded ? 'trigger-3a-up' : 'trigger-3a')
+    : (isUpgraded ? 'trigger-3b-up' : 'trigger-3b');
+  const triggerLabel = r.triggerType === '3a'
+    ? (r.maxA >= 4 ? '4a↑' : '3a')
+    : (r.maxB >= 4 ? '4b↑' : '3b');
+  const triggerBadge = `<span class="trigger-badge ${triggerClass}">${triggerLabel}</span>`;
 
-  return `
-    <td><span class="sym" onclick="lookupAndShow('${r.symbol}')">${r.symbol}</span></td>
-    <td class="${pcls}">${fmt(r.last_price,2)}</td>
-    <td class="${pcls}">${sign}${pct.toFixed(2)}%</td>
-    <td class="${pcls}">${sign}${fmt(r.change_amount,3)}</td>
-    <td><div class="vol-cell">${fmtVol(vol)}<div class="mini-bar"><div class="mini-bar-fill" style="width:${vPct.toFixed(1)}%"></div></div></div></td>
-    <td class="${vr >= 2 ? 'up' : 'flat'}">${vr > 0 ? vr.toFixed(2)+'x' : '—'}</td>
-    <td style="color:#555;">${r.bars_count ?? '—'}</td>
-    <td style="color:#26a69a;font-weight:bold;">${r.triggered_count}</td>
-    <td style="color:#90caf9;">${r.avg_5day_range != null ? fmt(r.avg_5day_range, 2) : '—'}</td>
-    <td><div class="win-tags">${winTags || '—'}</div></td>`;
-}
-
-// ── 代码查询 ──────────────────────────────────────────────────────────────
-function lookupAndShow(sym) {
-  document.getElementById('symbolInput').value = sym;
-  renderLookup(sym);
-}
-
-function handleLookup() {
-  const sym = document.getElementById('symbolInput').value.trim().toUpperCase();
-  if (!sym) return;
-  renderLookup(sym);
-}
-
-function clearLookup() {
-  document.getElementById('symbolInput').value = '';
-  const el = document.getElementById('lookupResult');
-  el.className = 'lookup-result';
-  el.innerHTML = '';
-}
-
-function renderLookup(sym) {
-  const el  = document.getElementById('lookupResult');
-  const row = allData.find(r => r.symbol.toUpperCase() === sym);
-  if (!row) {
-    el.className = 'lookup-result show';
-    el.innerHTML = `<div style="color:#888;font-size:13px;">
-      未找到 <b style="color:#fff">${sym}</b> —— 可能不在触发列表中，或30分钟内暂无足够数据
-    </div>`;
-    return;
+  // 置顶徽标
+  let pinBadge = '';
+  if (r.isPinned && r.pinnedUntil) {
+    const remainMs  = Math.max(0, new Date(r.pinnedUntil).getTime() - now);
+    const remainSec = Math.ceil(remainMs / 1000);
+    const mm = String(Math.floor(remainSec / 60)).padStart(2, '0');
+    const ss = String(remainSec % 60).padStart(2, '0');
+    pinBadge = `<span class="pin-badge">📌 ${mm}:${ss}</span>`;
   }
 
-  const pct  = Number(row.change_pct);
-  const pcls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
-  const sign = pct > 0 ? '+' : '';
+  // 倒计时进度条
+  const anchorMs  = new Date(r.anchorTime).getTime();
+  const expireMs  = new Date(r.expireAt).getTime();
+  const totalMs   = expireMs - anchorMs;
+  const remainMs2 = Math.max(0, expireMs - now);
+  const pctFill   = totalMs > 0 ? (remainMs2 / totalMs * 100).toFixed(1) : 0;
+  const remainSec2 = Math.ceil(remainMs2 / 1000);
+  const fillCls   = pctFill > 60 ? 'fresh' : pctFill > 30 ? 'mid' : 'ending';
+  const mm2 = String(Math.floor(remainSec2 / 60)).padStart(2, '0');
+  const ss2 = String(remainSec2 % 60).padStart(2, '0');
+  const anchorStr = new Date(r.anchorTime).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
 
-  const winCards = WINDOWS.map(w => {
-    const wd = row.windows?.[w] || {};
-    const triggered = wd.triggered === true;
-    const cls = triggered ? 'triggered' : 'not-triggered';
-    const badge = triggered
-      ? `<span class="win-badge">✓ 触发</span>`
-      : `<span class="win-badge no">未触发</span>`;
-
-    const stats = triggered ? [
-      { label: '触A次数', val: wd.countA ?? '—', pass: (wd.countA ?? 0) >= 2 },
-      { label: '触B次数', val: wd.countB ?? '—', pass: (wd.countB ?? 0) >= 2 },
-      { label: 'A+B合计', val: wd.totalCount ?? '—', pass: (wd.totalCount ?? 0) >= 5 },
-      { label: '窗口量',  val: wd.winVol != null ? fmtVol(wd.winVol) : '—', pass: (wd.winVol ?? 0) >= 310 },
-      { label: '高低差',  val: wd.winHigh != null && wd.winLow != null ? fmt(wd.winHigh - wd.winLow, 4) : '—', pass: (wd.winHigh - wd.winLow) >= 0.05 },
-    ] : [];
-
-    const patternHTML = triggered && wd.matchedPattern
-      ? `<div><span class="win-pattern">${wd.matchedPattern === 'ABA' ? 'A→B→A' : 'B→A→B'}</span></div>`
-      : triggered ? `<div><span class="win-pattern no">无模式</span></div>` : '';
-
-    const statsHTML = stats.map(s =>
-      `<div class="win-stat">${s.label}<span class="${s.pass ? 'pass' : 'fail'}">${s.val}</span></div>`
-    ).join('');
-
-    return `<div class="win-card ${cls}">
-      <div class="win-card-title"><span>${w} 分钟窗口</span>${badge}</div>
-      <div class="win-stats">${statsHTML}</div>
-      ${patternHTML}
+  // 触碰计数胶囊
+  const aHi = r.maxA >= 4;
+  const bHi = r.maxB >= 4;
+  const countHTML = `
+    <div class="count-cell">
+      <span class="cnt cnt-a ${aHi ? 'hi' : ''}">a:${r.maxA}</span>
+      <span class="cnt cnt-b ${bHi ? 'hi' : ''}">b:${r.maxB}</span>
     </div>`;
-  }).join('');
 
-  el.className = 'lookup-result show';
-  el.innerHTML = `
-    <div class="lookup-sym">
-      ${sym}
-      <span class="${pcls}">${fmt(row.last_price,2)}  ${sign}${pct.toFixed(2)}%</span>
-      <span style="color:#555;">K线 ${row.bars_count ?? '—'} 根</span>
-    </div>
-    <div class="win-grid">${winCards}</div>`;
+  return `
+    <td><span class="sym" onclick="void(0)">${r.symbol}</span>${triggerBadge}${pinBadge}</td>
+    <td class="${pcls}">${fmt(r.last_price, 2)}</td>
+    <td class="${pcls}">${sign}${pct.toFixed(2)}%</td>
+    <td><div class="vol-cell">${fmtVol(vol)}<div class="mini-bar"><div class="mini-bar-fill" style="width:${vPct.toFixed(1)}%"></div></div></div></td>
+    <td style="color:#90caf9;">${fmt(r.day_range, 2)}</td>
+    <td style="color:#90caf9;">${r.avg_range != null ? fmt(r.avg_range, 2) : '—'}</td>
+    <td style="color:#bbb;font-size:12px;">${fmt(r.winHigh,2)} / ${fmt(r.winLow,2)}</td>
+    <td><div class="ab-cell"><span class="ab-a">A ${fmt(r.priceA,2)}</span><span class="ab-b">B ${fmt(r.priceB,2)}</span></div></td>
+    <td>${countHTML}</td>
+    <td style="color:#26a69a;">${fmtVol(r.cycleVol)}</td>
+    <td>
+      <div class="expire-cell">
+        <span class="expire-time">${anchorStr} · ${mm2}:${ss2}</span>
+        <div class="expire-bar"><div class="expire-bar-fill ${fillCls}" style="width:${pctFill}%"></div></div>
+      </div>
+    </td>`;
 }
 
 // ── UTILS ─────────────────────────────────────────────────────────────────
@@ -652,6 +607,8 @@ setInterval(() => {
     countdown = 10;
   } else {
     countdown--;
+    // 每秒更新倒计时进度条（不重新请求）
+    renderTable();
   }
   document.getElementById('refresh-timer').textContent = `${countdown}s 后刷新`;
 }, 1000);
@@ -663,7 +620,7 @@ document.addEventListener('visibilitychange', () => {
 FILTER_IDS.forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
-  el.addEventListener('input',   () => applyFilter());
+  el.addEventListener('input', () => applyFilter());
   el.addEventListener('keydown', e => { if (e.key === 'Enter') applyFilter(); });
 });
 
