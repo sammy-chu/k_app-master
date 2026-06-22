@@ -137,16 +137,16 @@
     border-radius: 3px; font-weight: bold; margin-left: 4px;
     vertical-align: middle;
   }
-  .trigger-3a {
+  .trigger-4a {
     background: #26a69a18; border: 1px solid #26a69a55; color: #26a69a;
   }
-  .trigger-3b {
+  .trigger-4b {
     background: #ffa72618; border: 1px solid #ffa72655; color: #ffa726;
   }
-  .trigger-3a-up {
+  .trigger-4a-up {
     background: #26a69a30; border: 1px solid #26a69a88; color: #4dd0c4;
   }
-  .trigger-3b-up {
+  .trigger-4b-up {
     background: #ffa72630; border: 1px solid #ffa72688; color: #ffcc02;
   }
 
@@ -309,7 +309,7 @@
       <span class="rule-tag">B = 低点 + 振幅 × 90%</span>
       <span class="rule-tag">绝对约束 &lt; 0.15元</span>
       <span class="rule-tag">周期成交 &gt; 100股</span>
-      <span class="rule-tag">触碰 ≥ 3次预警 · 升级置顶闪烁3分钟</span>
+      <span class="rule-tag">触碰 ≥ 4次预警 · 同向达5次升级置顶闪烁3分钟</span>
     </div>
     <span id="count-info">—</span>
   </div>
@@ -320,13 +320,13 @@
       <tr>
         <th onclick="sortBy('symbol')">代码</th>
         <th onclick="sortBy('last_price')">现价</th>
-        <th onclick="sortBy('change_pct')" class="sort-desc">涨跌%</th>
+        <th onclick="sortBy('change_pct')">涨跌%</th>
         <th onclick="sortBy('total_volume')">今日量</th>
         <th onclick="sortBy('day_range')">当日波动</th>
         <th onclick="sortBy('avg_range')">10日均波动</th>
         <th onclick="sortBy('winHigh')" title="7分钟窗口高低点">窗口高/低</th>
         <th onclick="sortBy('priceA')" title="预警价A（下轨10%）和B（上轨90%）">A价 / B价</th>
-        <th onclick="sortBy('maxA')" title="周期内触碰下轨(a)和上轨(b)的K线数">触碰次数</th>
+        <th onclick="sortBy('maxA')" title="周期内触碰下轨(a)和上轨(b)的K线数；9点后按A/B最大值排序" class="sort-desc">触碰次数</th>
         <th onclick="sortBy('cycleVol')" title="7分钟周期内成交量">周期量</th>
         <th onclick="sortBy('anchorTime')" title="首次触发时间及到期倒计时">触发 / 剩余</th>
       </tr>
@@ -342,7 +342,7 @@
 // ── STATE ─────────────────────────────────────────────────────────────────
 let allData    = [];
 let sortedData = [];
-let sortKey    = 'anchorTime';
+let sortKey    = 'maxA';
 let sortDir    = -1;
 let maxVol     = 1;
 let countdown  = 10;
@@ -404,6 +404,21 @@ function toggleFilter() {
 function getV(id) {
   const v = document.getElementById(id)?.value.trim();
   return (!v || v === '') ? null : Number(v);
+}
+
+// 判断北京时间是否已过 9:00（开盘8:00后1小时）
+// 8:00-9:00 触碰次数排序仅看 maxA；9:00 之后 A/B 权限合并，取 max(maxA, maxB)
+function isAfter9amBJ() {
+  const bj = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+  const h = bj.getHours();
+  return h >= 9;
+}
+
+function getTouchSortValue(row) {
+  const a = Number(row.maxA) || 0;
+  if (!isAfter9amBJ()) return a;
+  const b = Number(row.maxB) || 0;
+  return Math.max(a, b);
 }
 
 function updateHighlights() {
@@ -478,6 +493,12 @@ async function fetchData() {
     if (!res.ok) throw new Error(res.status);
     const json = await res.json();
     allData = json.alerts || [];
+    // 预解析时间戳，避免每次渲染/每秒倒计时都重新 new Date() 解析字符串
+    for (const r of allData) {
+      r._anchorMs = new Date(r.anchorTime).getTime();
+      r._expireMs = new Date(r.expireAt).getTime();
+      r._pinnedUntilMs = r.pinnedUntil ? new Date(r.pinnedUntil).getTime() : null;
+    }
     maxVol  = allData.reduce((m, r) => Math.max(m, Number(r.total_volume)||0), 1);
 
     if (dot) dot.className = 'status-dot live';
@@ -530,13 +551,17 @@ function applyFilter() {
     const va = sortKey === 'symbol'
       ? a[sortKey]
       : sortKey === 'anchorTime'
-        ? new Date(a.anchorTime).getTime()
-        : (Number(a[sortKey]) ?? -Infinity);
+        ? a._anchorMs
+        : sortKey === 'maxA'
+          ? getTouchSortValue(a)
+          : (Number(a[sortKey]) ?? -Infinity);
     const vb = sortKey === 'symbol'
       ? b[sortKey]
       : sortKey === 'anchorTime'
-        ? new Date(b.anchorTime).getTime()
-        : (Number(b[sortKey]) ?? -Infinity);
+        ? b._anchorMs
+        : sortKey === 'maxA'
+          ? getTouchSortValue(b)
+          : (Number(b[sortKey]) ?? -Infinity);
     return va < vb ? sortDir : va > vb ? -sortDir : 0;
   });
 
@@ -549,30 +574,38 @@ function applyFilter() {
 }
 
 // ── RENDER TABLE ──────────────────────────────────────────────────────────
+const rowMap = new Map(); // symbol -> tr，增量维护，避免每次重新扫描 DOM
+
 function renderTable() {
   const tbody = document.getElementById('tbody');
   if (sortedData.length === 0) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="11">暂无预警</td></tr>`;
+    rowMap.clear();
     return;
   }
 
   const now = Date.now();
-  const existingRows = {};
-  for (const tr of tbody.querySelectorAll('tr[data-sym]')) {
-    existingRows[tr.dataset.sym] = tr;
-  }
-
+  const seen = new Set();
   let ci = 0;
   for (const row of sortedData) {
     const html = buildRowHTML(row, now);
-    let tr = existingRows[row.symbol];
-    if (!tr) { tr = document.createElement('tr'); tr.dataset.sym = row.symbol; }
+    let tr = rowMap.get(row.symbol);
+    if (!tr) {
+      tr = document.createElement('tr');
+      tr.dataset.sym = row.symbol;
+      rowMap.set(row.symbol, tr);
+    }
     if (tr._lastHtml !== html) { tr.innerHTML = html; tr._lastHtml = html; }
     tr.className = row.isPinned ? 'pinned' : '';
     if (tbody.children[ci] !== tr) tbody.insertBefore(tr, tbody.children[ci] || null);
+    seen.add(row.symbol);
     ci++;
   }
   while (tbody.children.length > sortedData.length) tbody.removeChild(tbody.lastChild);
+  // 清理已不在数据集中的行，防止 rowMap 无限增长
+  for (const [sym, tr] of rowMap) {
+    if (!seen.has(sym)) rowMap.delete(sym);
+  }
 }
 
 function buildRowHTML(r, now) {
@@ -583,20 +616,20 @@ function buildRowHTML(r, now) {
   const vPct = Math.min(100, maxVol > 0 ? vol / maxVol * 100 : 0);
 
   // 触发类型徽标
-  const isUpgraded = r.isPinned || (r.triggerType === '3a' && r.maxA >= 4) ||
-                     (r.triggerType === '3b' && r.maxB >= 4);
-  const triggerClass = r.triggerType === '3a'
-    ? (isUpgraded ? 'trigger-3a-up' : 'trigger-3a')
-    : (isUpgraded ? 'trigger-3b-up' : 'trigger-3b');
-  const triggerLabel = r.triggerType === '3a'
-    ? (r.maxA >= 4 ? '4a↑' : '3a')
-    : (r.maxB >= 4 ? '4b↑' : '3b');
+  const isUpgraded = r.isPinned || (r.triggerType === '4a' && r.maxA >= 5) ||
+                     (r.triggerType === '4b' && r.maxB >= 5);
+  const triggerClass = r.triggerType === '4a'
+    ? (isUpgraded ? 'trigger-4a-up' : 'trigger-4a')
+    : (isUpgraded ? 'trigger-4b-up' : 'trigger-4b');
+  const triggerLabel = r.triggerType === '4a'
+    ? (r.maxA >= 5 ? '5a↑' : '4a')
+    : (r.maxB >= 5 ? '5b↑' : '4b');
   const triggerBadge = `<span class="trigger-badge ${triggerClass}">${triggerLabel}</span>`;
 
   // 置顶徽标
   let pinBadge = '';
-  if (r.isPinned && r.pinnedUntil) {
-    const remainMs  = Math.max(0, new Date(r.pinnedUntil).getTime() - now);
+  if (r.isPinned && r._pinnedUntilMs) {
+    const remainMs  = Math.max(0, r._pinnedUntilMs - now);
     const remainSec = Math.ceil(remainMs / 1000);
     const mm = String(Math.floor(remainSec / 60)).padStart(2, '0');
     const ss = String(remainSec % 60).padStart(2, '0');
@@ -604,8 +637,8 @@ function buildRowHTML(r, now) {
   }
 
   // 倒计时进度条
-  const anchorMs  = new Date(r.anchorTime).getTime();
-  const expireMs  = new Date(r.expireAt).getTime();
+  const anchorMs  = r._anchorMs;
+  const expireMs  = r._expireMs;
   const totalMs   = expireMs - anchorMs;
   const remainMs2 = Math.max(0, expireMs - now);
   const pctFill   = totalMs > 0 ? (remainMs2 / totalMs * 100).toFixed(1) : 0;
@@ -613,11 +646,11 @@ function buildRowHTML(r, now) {
   const fillCls   = pctFill > 60 ? 'fresh' : pctFill > 30 ? 'mid' : 'ending';
   const mm2 = String(Math.floor(remainSec2 / 60)).padStart(2, '0');
   const ss2 = String(remainSec2 % 60).padStart(2, '0');
-  const anchorStr = new Date(r.anchorTime).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const anchorStr = new Date(anchorMs).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
 
   // 触碰计数胶囊
-  const aHi = r.maxA >= 4;
-  const bHi = r.maxB >= 4;
+  const aHi = r.maxA >= 5;
+  const bHi = r.maxB >= 5;
   const countHTML = `
     <div class="count-cell">
       <span class="cnt cnt-a ${aHi ? 'hi' : ''}">a:${r.maxA}</span>
@@ -643,6 +676,48 @@ function buildRowHTML(r, now) {
     </td>`;
 }
 
+// ── LIGHTWEIGHT PER-SECOND UPDATE (倒计时进度条) ──────────────────────────
+// 每秒只更新进度条宽度/样式和文字内容，不重新拼接/diff 整行 HTML，
+// 避免每秒对全部数据做一次 buildRowHTML + innerHTML 写入造成的卡顿。
+function updateExpireBars() {
+  const now = Date.now();
+  for (const row of sortedData) {
+    const tr = rowMap.get(row.symbol);
+    if (!tr) continue;
+
+    // 倒计时进度条
+    const totalMs   = row._expireMs - row._anchorMs;
+    const remainMs  = Math.max(0, row._expireMs - now);
+    const pctFill   = totalMs > 0 ? (remainMs / totalMs * 100) : 0;
+    const remainSec = Math.ceil(remainMs / 1000);
+    const mm = String(Math.floor(remainSec / 60)).padStart(2, '0');
+    const ss = String(remainSec % 60).padStart(2, '0');
+    const fillCls = pctFill > 60 ? 'fresh' : pctFill > 30 ? 'mid' : 'ending';
+
+    const fillEl = tr.querySelector('.expire-bar-fill');
+    const timeEl = tr.querySelector('.expire-time');
+    if (fillEl) {
+      fillEl.style.width = pctFill.toFixed(1) + '%';
+      fillEl.className = 'expire-bar-fill ' + fillCls;
+    }
+    if (timeEl) {
+      const anchorStr = new Date(row._anchorMs).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      timeEl.textContent = `${anchorStr} · ${mm}:${ss}`;
+    }
+
+    // 置顶倒计时徽标
+    if (row.isPinned && row._pinnedUntilMs) {
+      const pinEl = tr.querySelector('.pin-badge');
+      if (pinEl) {
+        const remainPinSec = Math.ceil(Math.max(0, row._pinnedUntilMs - now) / 1000);
+        const pmm = String(Math.floor(remainPinSec / 60)).padStart(2, '0');
+        const pss = String(remainPinSec % 60).padStart(2, '0');
+        pinEl.textContent = `📌 ${pmm}:${pss}`;
+      }
+    }
+  }
+}
+
 // ── UTILS ─────────────────────────────────────────────────────────────────
 function fmt(v, dec) {
   const n = Number(v);
@@ -659,8 +734,8 @@ setInterval(() => {
     countdown = 10;
   } else {
     countdown--;
-    // 每秒更新倒计时进度条（不重新请求）
-    renderTable();
+    // 每秒只做轻量级 DOM 更新（进度条宽度/文本），不重新渲染整表
+    updateExpireBars();
   }
   document.getElementById('refresh-timer').textContent = `${countdown}s 后刷新`;
 }, 1000);

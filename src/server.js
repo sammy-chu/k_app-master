@@ -945,7 +945,7 @@ async function pruneStableSnapshot() {
 
 // === 边界预警扫描 ===
 // 每10秒执行，基于 window10m 滚动窗口最近7根K线
-// 逻辑：首次触发后锚定，保留7分钟，期间持续追踪升级
+// 逻辑：首次触发（触碰≥4次）后锚定，保留7分钟，期间持续追踪，同向达到5次升级置顶3分钟
 function scanBoundaryAlerts() {
   const now = new Date();
   const bj  = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
@@ -999,8 +999,8 @@ function scanBoundaryAlerts() {
 
       if (!existing.upgraded) {
         const shouldUpgrade =
-          (existing.triggerType === '3a' && (existing.maxA >= 4 || existing.maxB >= 3)) ||
-          (existing.triggerType === '3b' && (existing.maxB >= 4 || existing.maxA >= 3));
+          (existing.triggerType === '4a' && existing.maxA >= 5) ||
+          (existing.triggerType === '4b' && existing.maxB >= 5);
 
         if (shouldUpgrade) {
           existing.upgraded    = true;
@@ -1009,13 +1009,13 @@ function scanBoundaryAlerts() {
       }
     } else {
       // ── 无活跃预警：检查是否首次触发 ──
-      if (a < 3 && b < 3) continue;
+      if (a < 4 && b < 4) continue;
 
       boundaryAlertMap.set(symbol, {
         symbol,
         anchorTime:   now,
         expireAt:     new Date(now.getTime() + 7 * 60 * 1000),
-        triggerType:  a >= 3 ? '3a' : '3b',
+        triggerType:  a >= 4 ? '4a' : '4b',
         maxA:         a,
         maxB:         b,
         upgraded:     false,
