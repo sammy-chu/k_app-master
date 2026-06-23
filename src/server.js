@@ -946,6 +946,9 @@ async function pruneStableSnapshot() {
 // === 边界预警扫描 ===
 // 每10秒执行，基于 window10m 滚动窗口最近7根K线
 // 逻辑：首次触发（触碰≥4次）后锚定，保留7分钟，期间持续追踪，同向达到5次升级置顶3分钟
+// 新增约束（突破30分钟轨道）：首次触发时，
+//   触A → 7分钟预警价A(priceA) 必须落在 [30分钟最低点low30, 30分钟预警价A30(priceA30)] 之间
+//   触B → 7分钟预警价B(priceB) 必须落在 [30分钟预警价B30(priceB30), 30分钟最高点high30] 之间
 function scanBoundaryAlerts() {
   const now = new Date();
   const bj  = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
@@ -974,9 +977,9 @@ function scanBoundaryAlerts() {
     const r6Range = winHigh - winLow;
     if (r6Range <= 0) continue;
 
-    // 预警价
-    const priceA = winLow  + r6Range * 0.1;
-    const priceB = winLow  + r6Range * 0.9;
+    // 预警价（0.2 / 0.8 分位）
+    const priceA = winLow  + r6Range * 0.2;
+    const priceB = winLow  + r6Range * 0.8;
 
     // 0.15 元绝对值约束
     if ((priceA - winLow)  >= 0.15) continue;
@@ -999,23 +1002,46 @@ function scanBoundaryAlerts() {
 
       if (!existing.upgraded) {
         const shouldUpgrade =
-          (existing.triggerType === '4a' && existing.maxA >= 5) ||
-          (existing.triggerType === '4b' && existing.maxB >= 5);
+          (existing.triggerType === '4a' && existing.maxA >= 6) ||
+          (existing.triggerType === '4b' && existing.maxB >= 6);
 
         if (shouldUpgrade) {
           existing.upgraded    = true;
-          existing.pinnedUntil = new Date(now.getTime() + 3 * 60 * 1000);
+          existing.pinnedUntil = new Date(now.getTime() + 2 * 60 * 1000);
         }
       }
     } else {
       // ── 无活跃预警：检查是否首次触发 ──
       if (a < 4 && b < 4) continue;
 
+      const triggerType = a >= 4 ? '4a' : '4b';
+
+      // 突破30分钟轨道校验：
+      // 30分钟窗口（含当前7根）算出 high30/low30，再按同样20%/80%分位算 priceA30/priceB30
+      const bars30 = window30m.get(symbol);
+      if (!bars30 || bars30.length === 0) continue;
+
+      const high30  = Math.max(...bars30.map(b => b.high));
+      const low30   = Math.min(...bars30.map(b => b.low));
+      const range30 = high30 - low30;
+      if (range30 <= 0) continue; // 30分钟内无波动，无法判断突破，跳过
+
+      const priceA30 = low30  + range30 * 0.2;
+      const priceB30 = low30  + range30 * 0.8;
+
+      if (triggerType === '4a') {
+        // 触A → priceA 必须落在 [low30, priceA30] 之间
+        if (priceA < low30 || priceA > priceA30) continue;
+      } else {
+        // 触B → priceB 必须落在 [priceB30, high30] 之间
+        if (priceB < priceB30 || priceB > high30) continue;
+      }
+
       boundaryAlertMap.set(symbol, {
         symbol,
         anchorTime:   now,
         expireAt:     new Date(now.getTime() + 7 * 60 * 1000),
-        triggerType:  a >= 4 ? '4a' : '4b',
+        triggerType,
         maxA:         a,
         maxB:         b,
         upgraded:     false,
@@ -1660,6 +1686,8 @@ async function writeIntradayVolMinute() {
 // 改为从 daily_summary.total_volume 取收盘终量（PPro8 L1DB 全量），写入 17:00 分钟档
 // 注：daily_summary 只存最新全量值，无法还原历史每分钟增量，故只补写收盘终值这一条
 async function snapshotTodayAllMinutes() {
+  // [DISABLED] 已由 orderbook_processor_bl.py 接管，此函数不再执行写库操作
+  return;
   const client = await pool.connect();
   try {
     await client.query('SET statement_timeout = 30000');
@@ -2763,6 +2791,8 @@ async function ensureVolumeAlertSchema() {
 // 无 openPriceDone 限制，新股上市后下一个60秒自动补写
 let _openPriceRunning = false;
 async function initOpenPrice() {
+  // [DISABLED] 按要求禁用，此函数不再执行写库操作
+  return;
   if (_openPriceRunning) return;
   const nowBeijing = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
   if (nowBeijing.getHours() * 60 + nowBeijing.getMinutes() < 8 * 60) return;
@@ -2817,6 +2847,8 @@ let lastDailySummaryRunAt = null;  // 增量扫描起点
 // openPriceDone 已移除：initOpenPrice 改为定期补写，无需一次性标志
 
 async function updateDailySummary() {
+  // [DISABLED] 按要求禁用，此函数不再执行写库操作
+  return;
   // [FIX K] 非交易时段不写入
   const nowBeijing = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
   const beijingMins = nowBeijing.getHours() * 60 + nowBeijing.getMinutes();
@@ -3237,14 +3269,14 @@ function startAlertMonitor() {
   //   });
   // }, 20000);
 
-  // ── t=0s：DailySummaryUpdater（主池，60s，最先启动）──────────────────────
+  // ── t=0s：DailySummaryUpdater（主池，60s，最先启动）── [DISABLED] ─────────
   // 注：total_volume 已从此任务移除，仅负责 open/close/high/low 更新
-  console.log(`[DailySummaryUpdater] starting, interval=60s`);
-  runScan('DailySummaryUpdater', updateDailySummary, 60000);
+  // console.log(`[DailySummaryUpdater] starting, interval=60s`);
+  // runScan('DailySummaryUpdater', updateDailySummary, 60000);
 
-  // ── OpenPrice：每60秒定期补写 open_price IS NULL 的行（主池）──────────────
+  // ── OpenPrice：每60秒定期补写 open_price IS NULL 的行（主池）── [DISABLED] ──
   // 启动后立即执行一次，之后每60秒检查新股，有补写则打日志，无则静默
-  runScan('OpenPrice', initOpenPrice, 60000);
+  // runScan('OpenPrice', initOpenPrice, 60000);
 
   // ── t=30s：IntradayAvgVol（主池，60s，延迟30s避开启动期高峰）────────────
   setTimeout(() => {

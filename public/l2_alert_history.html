@@ -591,7 +591,7 @@
     let rankingRefreshCountdown = 0;
     const RANKING_REFRESH_INTERVAL = 120;
 
-    const LS_KEY = 'l2_blocked_stocks';
+    const LS_KEY = 'sharedBlockedStocks';
     let blockedStocks = new Set(JSON.parse(localStorage.getItem(LS_KEY) || '[]'));
 
     function saveBlocked() {
