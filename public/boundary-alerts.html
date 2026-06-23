@@ -182,6 +182,86 @@
     border: 1px solid #ffa72644; color: #ffa726; background: #ffa7260a;
   }
 
+  /* ── 代码查询框 ── */
+  .lookup-panel {
+    background: #222; border: 1px solid #333; border-radius: 6px;
+    margin-bottom: 14px; padding: 12px 16px;
+  }
+  .lookup-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .lookup-row label { font-size: 12px; color: #888; white-space: nowrap; }
+  #symbolInput {
+    width: 130px; font-size: 14px; font-weight: bold;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .lookup-result {
+    margin-top: 10px; display: none;
+    background: #1a1a1a; border: 1px solid #333; border-radius: 4px;
+    padding: 10px 14px;
+  }
+  .lookup-result.show { display: block; }
+
+  /* 历史时间点面板 */
+  .history-panel {
+    margin-top: 10px; display: none;
+    background: #1a1a1a; border: 1px solid #333; border-radius: 4px;
+    padding: 12px 14px;
+  }
+  .history-panel.show { display: block; }
+  .history-header {
+    font-size: 12px; color: #666; margin-bottom: 10px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .history-header strong { color: #aaa; }
+  .history-empty { font-size: 13px; color: #555; padding: 6px 0; }
+  .timeline { display: flex; flex-direction: column; position: relative; }
+  .timeline::before {
+    content: ''; position: absolute; left: 56px; top: 8px; bottom: 8px;
+    width: 1px; background: #2e2e2e; z-index: 0;
+  }
+  .tl-item { display: flex; align-items: flex-start; gap: 12px; padding: 5px 0; }
+  .tl-time { font-size: 12px; color: #888; white-space: nowrap; width: 48px; text-align: right; padding-top: 3px; flex-shrink: 0; }
+  .tl-dot { width: 9px; height: 9px; border-radius: 50%; background: #ffa726; flex-shrink: 0; margin-top: 4px; position: relative; z-index: 1; box-shadow: 0 0 0 2px #1a1a1a; }
+  .tl-dot.current { background: #ffd54f; box-shadow: 0 0 0 2px #1a1a1a, 0 0 6px #ffd54f88; }
+  .tl-body { flex: 1; }
+  .tl-label { font-size: 12px; color: #aaa; }
+  .tl-label.current { color: #ffd54f; }
+  .tl-vals { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; font-size: 11px; color: #555; }
+  .tl-val-item span { color: #ffa726; }
+  .lookup-sym {
+    font-size: 16px; font-weight: bold; color: #fff; margin-bottom: 8px;
+  }
+  .lookup-sym span { font-size: 12px; font-weight: normal; margin-left: 10px; }
+  .lookup-sym .pass-all { color: #26a69a; }
+  .lookup-sym .fail-some { color: #ef5350; }
+  .lookup-sym .no-data { color: #888; }
+  .rule-detail-grid {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
+    margin-top: 6px;
+  }
+  .rule-card {
+    background: #252525; border-radius: 4px; padding: 8px 10px;
+    border-left: 3px solid #333;
+  }
+  .rule-card.pass { border-left-color: #26a69a; }
+  .rule-card.fail { border-left-color: #ef5350; }
+  .rule-card.na   { border-left-color: #444; opacity: 0.6; }
+  .rule-card-title { font-size: 11px; color: #666; margin-bottom: 3px; }
+  .rule-card-value { font-size: 13px; font-weight: bold; }
+  .rule-card.pass .rule-card-value { color: #26a69a; }
+  .rule-card.fail .rule-card-value { color: #ef5350; }
+  .rule-card.na   .rule-card-value { color: #555; }
+  .rule-card-threshold { font-size: 10px; color: #555; margin-top: 2px; }
+  .fail-reason-banner {
+    margin-top: 8px; padding: 6px 10px; border-radius: 4px;
+    background: #ef53500f; border: 1px solid #ef535033;
+    color: #ef9d9b; font-size: 12px;
+  }
+  .pass-reason-banner {
+    margin-top: 8px; padding: 6px 10px; border-radius: 4px;
+    background: #26a69a0f; border: 1px solid #26a69a33;
+    color: #26a69a; font-size: 12px;
+  }
+
   /* ── 表格 ── */
   table {
     width: 100%; border-collapse: collapse;
@@ -283,6 +363,7 @@
     .filter-panel { gap: 10px; }
     .header-bar { flex-direction: column; align-items: flex-start; gap: 8px; }
     #block-modal { width: 90vw; }
+    .rule-detail-grid { grid-template-columns: repeat(2, 1fr); }
   }
 </style>
 </head>
@@ -302,6 +383,7 @@
     <a href="/stable-screener">稳定选股</a>
     <a href="/oscillator-screener">震荡筛选</a>
     <a href="/boundary-alerts" class="active">边界预警</a>
+    <a href="/active-trading">活跃主买</a>
   </div>
 
   <!-- 标题栏 -->
@@ -375,6 +457,30 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- 代码查询面板 -->
+  <div class="lookup-panel">
+    <div class="lookup-row">
+      <label>查询单只股票为何没有/有边界预警</label>
+      <input type="text" id="symbolInput" placeholder="输入代码" maxlength="20"
+             oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter')handleLookup()">
+      <input type="text" id="timeFrom" placeholder="开始 HH:MM" maxlength="5"
+             style="width:108px;"
+             oninput="this.value=this.value.replace(/[^0-9:]/g,'')"
+             onkeydown="if(event.key==='Enter')handleLookup()">
+      <span style="font-size:12px;color:#555;">—</span>
+      <input type="text" id="timeTo" placeholder="结束 HH:MM" maxlength="5"
+             style="width:108px;"
+             oninput="this.value=this.value.replace(/[^0-9:]/g,'')"
+             onkeydown="if(event.key==='Enter')handleLookup()">
+      <button class="btn" onclick="handleLookup()">查询</button>
+      <button class="btn" onclick="lookupHistory()" title="查询今日满足全部触发条件的历史时间点">📅 今日时间点</button>
+      <button class="btn" onclick="clearLookup()" style="color:#555;border-color:#333;">清除</button>
+      <span style="font-size:12px;color:#555;margin-left:4px;">时间留空查实时，填时间查历史快照</span>
+    </div>
+    <div class="lookup-result" id="lookupResult"></div>
+    <div class="history-panel" id="historyPanel"></div>
   </div>
 
   <!-- 状态栏 -->
@@ -771,15 +877,15 @@ function buildRowHTML(r, now) {
   const vol  = Number(r.total_volume) || 0;
   const vPct = Math.min(100, maxVol > 0 ? vol / maxVol * 100 : 0);
 
-  // 触发类型徽标
+  // 触发类型徽标：4 / 5 / 6↑ 三档纯展示区分，5档不参与升级/置顶判定（那仍由后端 isPinned 决定）
   const isUpgraded = r.isPinned || (r.triggerType === '4a' && r.maxA >= 6) ||
                      (r.triggerType === '4b' && r.maxB >= 6);
   const triggerClass = r.triggerType === '4a'
     ? (isUpgraded ? 'trigger-4a-up' : 'trigger-4a')
     : (isUpgraded ? 'trigger-4b-up' : 'trigger-4b');
   const triggerLabel = r.triggerType === '4a'
-    ? (r.maxA >= 6 ? '6a↑' : '4a')
-    : (r.maxB >= 6 ? '6b↑' : '4b');
+    ? (r.maxA >= 6 ? '6a↑' : r.maxA >= 5 ? '5a' : '4a')
+    : (r.maxB >= 6 ? '6b↑' : r.maxB >= 5 ? '5b' : '4b');
   const triggerBadge = `<span class="trigger-badge ${triggerClass}">${triggerLabel}</span>`;
 
   // 置顶徽标
@@ -814,7 +920,7 @@ function buildRowHTML(r, now) {
     </div>`;
 
   return `
-    <td><div class="symbol-cell"><span class="sym" onclick="void(0)">${r.symbol}</span><button class="btn-block-inline" onclick="blockStock('${r.symbol}')" title="屏蔽此股票">×</button>${triggerBadge}${pinBadge}</div></td>
+    <td><div class="symbol-cell"><span class="sym" onclick="lookupAndShow('${r.symbol}')">${r.symbol}</span><button class="btn-block-inline" onclick="blockStock('${r.symbol}')" title="屏蔽此股票">×</button>${triggerBadge}${pinBadge}</div></td>
     <td class="${pcls}">${fmt(r.last_price, 2)}</td>
     <td class="${pcls}">${sign}${pct.toFixed(2)}%</td>
     <td><div class="vol-cell">${fmtVol(vol)}<div class="mini-bar"><div class="mini-bar-fill" style="width:${vPct.toFixed(1)}%"></div></div></div></td>
@@ -872,6 +978,283 @@ function updateExpireBars() {
       }
     }
   }
+}
+
+// ── 代码查询 ──────────────────────────────────────────────────────────────
+function lookupAndShow(sym) {
+  document.getElementById('symbolInput').value = sym;
+  document.getElementById('timeFrom').value    = '';   // 点击表格代码 → 回实时模式
+  document.getElementById('timeTo').value      = '';
+  const hp = document.getElementById('historyPanel');
+  hp.className = 'history-panel';
+  hp.innerHTML = '';
+  checkRealtime(sym);
+  document.getElementById('lookupResult').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function clearLookup() {
+  document.getElementById('symbolInput').value = '';
+  document.getElementById('timeFrom').value    = '';
+  document.getElementById('timeTo').value      = '';
+  document.getElementById('lookupResult').className = 'lookup-result';
+  document.getElementById('lookupResult').innerHTML = '';
+  document.getElementById('historyPanel').className = 'history-panel';
+  document.getElementById('historyPanel').innerHTML = '';
+}
+
+// 统一入口：有时间 → 历史快照诊断，无时间 → 实时查询
+function handleLookup() {
+  const sym  = document.getElementById('symbolInput').value.trim().toUpperCase();
+  const from = document.getElementById('timeFrom').value.trim();
+  const to   = document.getElementById('timeTo').value.trim();
+  if (!sym) { alert('请输入股票代码'); return; }
+  if (from || to) {
+    diagnoseSymbol();
+  } else {
+    checkRealtime(sym);
+  }
+}
+
+// 实时查询：调用轻量后端API（不查库，window10m/window30m实时计算）
+async function checkRealtime(sym) {
+  const el = document.getElementById('lookupResult');
+  el.className = 'lookup-result show';
+  document.getElementById('historyPanel').className = 'history-panel';
+  document.getElementById('historyPanel').innerHTML = '';
+  el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} 实时状态中…</div>`;
+  try {
+    const res  = await fetch(`/api/boundary-alerts/check?symbol=${encodeURIComponent(sym)}`);
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    renderLookupResult(sym, null, data);
+  } catch (e) {
+    el.innerHTML = `<div style="color:#ef5350;font-size:13px;">查询失败：${e.message}</div>`;
+  }
+}
+
+async function diagnoseSymbol() {
+  const sym  = document.getElementById('symbolInput').value.trim().toUpperCase();
+  const from = document.getElementById('timeFrom').value.trim();
+  const to   = document.getElementById('timeTo').value.trim();
+  if (!sym) { alert('请输入股票代码'); return; }
+
+  const timeRe = /^\d{2}:\d{2}$/;
+  if (from && !timeRe.test(from)) { alert('开始时间格式错误，请输入 HH:MM'); return; }
+  if (to   && !timeRe.test(to))   { alert('结束时间格式错误，请输入 HH:MM'); return; }
+
+  const el = document.getElementById('lookupResult');
+  el.className = 'lookup-result show';
+  document.getElementById('historyPanel').className = 'history-panel';
+  document.getElementById('historyPanel').innerHTML = '';
+
+  // 只填了一个时间 → 单点查询；两个都填 → 范围查询
+  const isSingle = (from && !to) || (!from && to);
+  const singleTime = from || to;
+
+  if (isSingle) {
+    el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} @ ${singleTime} 快照中…</div>`;
+    try {
+      const res  = await fetch(`/api/boundary-alerts/diagnose?symbol=${encodeURIComponent(sym)}&time=${encodeURIComponent(singleTime)}`);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      renderLookupResult(sym, singleTime, data);
+    } catch(e) {
+      el.innerHTML = `<div style="color:#ef5350;font-size:13px;">查询失败：${e.message}</div>`;
+    }
+  } else {
+    el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} ${from}–${to} 快照中…</div>`;
+    try {
+      const res  = await fetch(`/api/boundary-alerts/diagnose-range?symbol=${encodeURIComponent(sym)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      renderDiagnoseRange(sym, data);
+    } catch(e) {
+      el.innerHTML = `<div style="color:#ef5350;font-size:13px;">查询失败：${e.message}</div>`;
+    }
+  }
+}
+
+// 渲染单点结果（实时 或 历史单分钟），data 结构与后端 buildBoundaryRuleCards 输出一致
+function renderLookupResult(sym, time, data) {
+  const el = document.getElementById('lookupResult');
+  const isRealtime = !time; // 无 time 参数 = 实时查询，inRankingCache 字段才有意义
+
+  if (!data.found) {
+    const rcInfo = (isRealtime && data.inRankingCache !== undefined)
+      ? `<div style="margin-top:6px;font-size:12px;${data.inRankingCache ? 'color:#26a69a;' : 'color:#ef5350;'}">
+          ${data.inRankingCache ? '✓ 在 rankingCache 中（有行情，但无10分钟K线数据）' : '✗ 不在 rankingCache 中（不在当前监控的股票池里，不会被扫描）'}
+        </div>`
+      : '';
+    el.innerHTML = `<div style="color:#888;font-size:13px;">
+      <b style="color:#fff">${sym}</b>${time ? ` 在 <b style="color:#fff">${time}</b>` : ''}
+      ${data.failReason || '暂无数据（10分钟内无交易记录，或快照尚未写入）'}
+      ${rcInfo}
+    </div>`;
+    return;
+  }
+  const price = data.last_price;
+  const pct   = data.change_pct != null ? Number(data.change_pct) : null;
+  const pcls  = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+  const sign  = pct > 0 ? '+' : '';
+  const statusLabel = data.triggered
+    ? `<span class="pass-all">✓ 满足触发条件</span>`
+    : `<span class="fail-some">✗ 未触发</span>`;
+  const timeInfo = time
+    ? `<span style="color:#555;font-size:11px;margin-left:10px;">@ ${time} · ${data.bars_count ?? '—'} 根K线</span>`
+    : `<span style="color:#555;font-size:11px;margin-left:10px;">实时 · ${data.bars_count ?? '—'} 根K线</span>`;
+
+  const rcLabel = (isRealtime && data.inRankingCache !== undefined)
+    ? (data.inRankingCache
+        ? `<span style="color:#26a69a;font-size:11px;margin-left:10px;">✓ 在rankingCache中</span>`
+        : `<span style="color:#ef5350;font-size:11px;margin-left:10px;">✗ 不在rankingCache中（不会被扫描）</span>`)
+    : '';
+
+  const reasonHTML = data.triggered
+    ? `<div class="pass-reason-banner">✓ 已满足全部条件${data.triggerType ? `（触发类型 ${data.triggerType}）` : ''}</div>`
+    : (data.failReason ? `<div class="fail-reason-banner">✗ 未触发原因：${data.failReason}</div>` : '');
+
+  el.className = 'lookup-result show';
+  el.innerHTML = `
+    <div class="lookup-sym" style="margin-bottom:6px;">
+      ${sym}
+      ${price != null ? `<span class="${pcls}">${fmt(price,2)}  ${sign}${pct.toFixed(2)}%</span>` : ''}
+      ${statusLabel}
+      ${timeInfo}
+      ${rcLabel}
+    </div>
+    <div class="rule-detail-grid">${buildRuleCards(data.rules)}</div>
+    ${reasonHTML}`;
+}
+
+function renderDiagnoseRange(sym, data) {
+  const el = document.getElementById('lookupResult');
+  if (data.count === 0) {
+    el.innerHTML = `<div style="color:#888;font-size:13px;">
+      <b style="color:#fff">${sym}</b> 在 ${data.from.slice(0,5)}–${data.to.slice(0,5)} 内暂无快照数据
+    </div>`;
+    return;
+  }
+
+  const triggeredCount = data.records.filter(r => r.triggered).length;
+
+  const rows = data.records.map(rec => {
+    const timeStr = rec.snap_time.slice(0, 5);
+    const ruleCells = rec.rules.map(r => {
+      let valStr;
+      if (r.value === null)      valStr = '—';
+      else if (r.id === 'touch') valStr = `a${r.value.a}/b${r.value.b}`;
+      else                       valStr = Number(r.value).toFixed(3);
+
+      const color = r.pass === null ? '#555' : r.pass ? '#26a69a' : '#ef5350';
+      return `<td style="padding:6px 8px;text-align:right;color:${color};font-size:12px;white-space:nowrap;">${valStr}</td>`;
+    }).join('');
+
+    const statusColor = rec.triggered ? '#26a69a' : '#ef5350';
+    const statusText  = rec.triggered ? '✓' : '✗';
+
+    return `<tr style="border-bottom:1px solid #2e2e2e;">
+      <td style="padding:6px 10px;color:#aaa;font-size:12px;white-space:nowrap;">${timeStr}</td>
+      <td style="padding:6px 8px;text-align:center;">
+        <span style="color:${statusColor};font-size:12px;font-weight:bold;">${statusText}</span>
+      </td>
+      ${ruleCells}
+      <td style="padding:6px 8px;color:#888;font-size:11px;max-width:220px;white-space:normal;">${rec.failReason || ''}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="margin-bottom:8px;font-size:12px;color:#888;">
+      <b style="color:#fff;font-size:14px;">${sym}</b>
+      <span style="margin-left:10px;">${data.from.slice(0,5)} — ${data.to.slice(0,5)}</span>
+      <span style="margin-left:10px;">${data.count} 个时间点</span>
+      <span style="margin-left:10px;color:#26a69a;">${triggeredCount} 个满足触发条件</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse;background:#252525;border-radius:6px;overflow:hidden;font-size:13px;">
+      <thead><tr style="background:#333;">
+        <th style="padding:6px 10px;text-align:left;color:#aaa;font-weight:600;font-size:11px;">时间</th>
+        <th style="padding:6px 8px;text-align:center;color:#aaa;font-weight:600;font-size:11px;">结果</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;">振幅</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;">0.15约束</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;">周期量</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;">触碰</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;">突破轨道</th>
+        <th style="padding:6px 8px;text-align:left;color:#aaa;font-weight:600;font-size:11px;">原因</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function buildRuleCards(rules) {
+  return rules.map(r => {
+    const cls  = r.pass === null ? 'na' : r.pass ? 'pass' : 'fail';
+    const icon = r.pass === null ? '' : r.pass ? '✓ ' : '✗ ';
+    let valueStr;
+    if (r.value === null)      valueStr = '—';
+    else if (r.id === 'touch') valueStr = `a=${r.value.a} / b=${r.value.b}`;
+    else                       valueStr = `${Number(r.value).toFixed(4)}${r.unit}`;
+    return `<div class="rule-card ${cls}">
+      <div class="rule-card-title">${r.label}</div>
+      <div class="rule-card-value">${icon}${valueStr}</div>
+      <div class="rule-card-threshold">阈值 ${r.threshold}</div>
+    </div>`;
+  }).join('');
+}
+
+async function lookupHistory() {
+  const sym = document.getElementById('symbolInput').value.trim().toUpperCase();
+  if (!sym) { alert('请先输入股票代码'); return; }
+  const panel = document.getElementById('historyPanel');
+  panel.className = 'history-panel show';
+  panel.innerHTML = `<div class="history-empty">正在查询 ${sym} 今日时间点…</div>`;
+  try {
+    const res  = await fetch(`/api/boundary-alerts/history?symbol=${encodeURIComponent(sym)}`);
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    renderHistory(sym, data);
+  } catch(e) {
+    panel.innerHTML = `<div class="history-empty" style="color:#ef5350;">查询失败：${e.message}</div>`;
+  }
+}
+
+function renderHistory(sym, data) {
+  const panel   = document.getElementById('historyPanel');
+  const records = data.records || [];
+  if (records.length === 0) {
+    panel.innerHTML = `
+      <div class="history-header"><strong>${sym}</strong><span>今日历史时间点</span></div>
+      <div class="history-empty">今日暂无满足触发条件的时间点</div>`;
+    return;
+  }
+  const latestTime = records[records.length - 1].time;
+  const items = [...records].reverse().map(rec => {
+    const isCurrent = rec.time === latestTime;
+    const pct  = Number(rec.change_pct);
+    const sign = pct > 0 ? '+' : '';
+    const pcls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+    const vals = [
+      { label: '类型', v: rec.triggerType || '—' },
+      { label: '触碰', v: (rec.touchA != null) ? `a${rec.touchA}/b${rec.touchB}` : '—' },
+      { label: 'A价',  v: rec.priceA != null ? fmt(rec.priceA, 3) : '—' },
+      { label: 'B价',  v: rec.priceB != null ? fmt(rec.priceB, 3) : '—' },
+      { label: '窗口高/低', v: (rec.winHigh != null) ? `${fmt(rec.winHigh,2)}/${fmt(rec.winLow,2)}` : '—' },
+    ].map(x => `<div class="tl-val-item">${x.label} <span>${x.v}</span></div>`).join('');
+    const priceStr = rec.last_price != null
+      ? `<span class="${pcls}" style="margin-left:6px;font-size:11px;">${fmt(rec.last_price,2)} ${sign}${pct.toFixed(2)}%</span>` : '';
+    return `<div class="tl-item">
+      <div class="tl-time">${rec.time.slice(0,5)}</div>
+      <div class="tl-dot${isCurrent ? ' current' : ''}"></div>
+      <div class="tl-body">
+        <div class="tl-label${isCurrent ? ' current' : ''}">${isCurrent ? '● 最新' : '✓ 触发'}${priceStr}</div>
+        <div class="tl-vals">${vals}</div>
+      </div>
+    </div>`;
+  }).join('');
+  panel.innerHTML = `
+    <div class="history-header">
+      <strong>${sym}</strong>
+      <span>今日共 <b style="color:#26a69a">${records.length}</b> 个满足触发条件的时间点</span>
+    </div>
+    <div class="timeline">${items}</div>`;
 }
 
 // ── UTILS ─────────────────────────────────────────────────────────────────

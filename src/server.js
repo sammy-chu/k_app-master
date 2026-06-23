@@ -194,6 +194,33 @@ async function ensureTables() {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS boundary_alert_snapshot (
+        symbol       TEXT     NOT NULL,
+        trade_date   DATE     NOT NULL,
+        snap_time    TIME     NOT NULL,
+        last_price   NUMERIC(12,4),
+        change_pct   NUMERIC(8,4),
+        bars_count   SMALLINT,
+        win_high     NUMERIC(12,4),
+        win_low      NUMERIC(12,4),
+        price_a      NUMERIC(12,4),
+        price_b      NUMERIC(12,4),
+        touch_a      SMALLINT,
+        touch_b      SMALLINT,
+        cycle_vol    NUMERIC(14,2),
+        high30       NUMERIC(12,4),
+        low30        NUMERIC(12,4),
+        price_a30    NUMERIC(12,4),
+        price_b30    NUMERIC(12,4),
+        trigger_type TEXT,
+        triggered    BOOLEAN  NOT NULL DEFAULT FALSE,
+        fail_reason  TEXT,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (symbol, trade_date, snap_time)
+      );
+    `);
+
     console.log('Tables ensured');
   } catch (err) {
     console.error('Error ensuring tables:', err);
@@ -376,6 +403,10 @@ const stableHistory = new Map();
 //               upgraded, pinnedUntil, priceA, priceB,
 //               winHigh, winLow, cycleVol, lastPrice }
 const boundaryAlertMap = new Map();
+
+// 边界预警历史时间点：symbol -> [{ time, triggerType, a, b, priceA, priceB, winHigh, winLow, last_price, change_pct }, ...]
+// 仅记录"满足触发条件"的分钟，供"今日时间点"时间轴查询，内存态，重启清空
+const boundaryHistory = new Map();
 
 // 实时盘口缓存：symbol -> { bid: [{price, vol}, ...], ask: [{price, vol}, ...], receivedAt }
 // 最多保留 L1/L2/L3 三档，每10秒增量刷新
@@ -943,6 +974,112 @@ async function pruneStableSnapshot() {
   }
 }
 
+// === 边界预警诊断（共用逻辑） ===
+// 给定 symbol，按 scanBoundaryAlerts 的同一套判断顺序逐步计算，返回每一步的中间值、
+// 是否最终触发(triggered)、以及未触发时的具体原因(failReason)。
+// 仅做计算，不读写 boundaryAlertMap，可安全在快照写入和实时查询中复用。
+function evalBoundaryCondition(symbol) {
+  const allBars = window10m.get(symbol);
+  if (!allBars || allBars.length === 0) {
+    return { found: false, failReason: '无10分钟K线数据' };
+  }
+
+  const bars = allBars.slice(-7);
+  const winHigh = Math.max(...bars.map(b => b.high));
+  const winLow  = Math.min(...bars.map(b => b.low));
+  const r6Range = winHigh - winLow;
+
+  const result = {
+    found: true,
+    barsCount: bars.length,
+    winHigh, winLow,
+    priceA: null, priceB: null,
+    touchA: null, touchB: null,
+    cycleVol: null,
+    high30: null, low30: null, priceA30: null, priceB30: null,
+    triggerType: null,
+    triggered: false,
+    failReason: null,
+  };
+
+  if (r6Range <= 0) {
+    result.failReason = '7分钟窗口内价格无波动（最高=最低）';
+    return result;
+  }
+
+  const priceA = winLow + r6Range * 0.2;
+  const priceB = winLow + r6Range * 0.8;
+  result.priceA = priceA;
+  result.priceB = priceB;
+
+  if ((priceA - winLow) >= 0.15) {
+    result.failReason = `A线绝对约束未通过：priceA-最低点=${(priceA - winLow).toFixed(4)} ≥ 0.15元`;
+    return result;
+  }
+  if ((winHigh - priceB) >= 0.15) {
+    result.failReason = `B线绝对约束未通过：最高点-priceB=${(winHigh - priceB).toFixed(4)} ≥ 0.15元`;
+    return result;
+  }
+
+  const cycleVol = bars.reduce((s, b) => s + b.volume, 0);
+  result.cycleVol = cycleVol;
+  if (cycleVol <= 100) {
+    result.failReason = `周期成交量不足：${cycleVol} ≤ 100股`;
+    return result;
+  }
+
+  const a = bars.filter(b => b.low  < priceA).length;
+  const b = bars.filter(b => b.high > priceB).length;
+  result.touchA = a;
+  result.touchB = b;
+
+  if (a < 4 && b < 4) {
+    result.failReason = `触碰次数不足：a=${a}, b=${b}（需任一项 ≥4）`;
+    return result;
+  }
+
+  const triggerType = a >= 4 ? '4a' : '4b';
+  result.triggerType = triggerType;
+
+  const bars30 = window30m.get(symbol);
+  if (!bars30 || bars30.length === 0) {
+    result.failReason = '无30分钟K线数据，无法判断突破';
+    return result;
+  }
+
+  const high30  = Math.max(...bars30.map(b => b.high));
+  const low30   = Math.min(...bars30.map(b => b.low));
+  const range30 = high30 - low30;
+  result.high30 = high30;
+  result.low30  = low30;
+
+  if (range30 <= 0) {
+    result.failReason = '30分钟窗口内价格无波动，无法判断突破';
+    return result;
+  }
+
+  const priceA30 = low30 + range30 * 0.2;
+  const priceB30 = low30 + range30 * 0.8;
+  result.priceA30 = priceA30;
+  result.priceB30 = priceB30;
+
+  if (triggerType === '4a') {
+    if (priceA < low30 || priceA > priceA30) {
+      result.failReason = `未突破30分钟轨道：priceA(${priceA.toFixed(4)}) 不在 [low30(${low30.toFixed(4)}), priceA30(${priceA30.toFixed(4)})] 区间内`;
+      return result;
+    }
+  } else {
+    if (priceB < priceB30 || priceB > high30) {
+      result.failReason = `未突破30分钟轨道：priceB(${priceB.toFixed(4)}) 不在 [priceB30(${priceB30.toFixed(4)}), high30(${high30.toFixed(4)})] 区间内`;
+      return result;
+    }
+  }
+
+  result.triggered  = true;
+  result.failReason = null;
+  return result;
+}
+
 // === 边界预警扫描 ===
 // 每10秒执行，基于 window10m 滚动窗口最近7根K线
 // 逻辑：首次触发（触碰≥4次）后锚定，保留7分钟，期间持续追踪，同向达到5次升级置顶3分钟
@@ -1057,6 +1194,126 @@ function scanBoundaryAlerts() {
   }
 }
 
+// === 边界预警快照写入 ===
+// 每60s对 rankingCache 中所有股票跑一遍 evalBoundaryCondition，写入数据库快照表，
+// 同时把"满足触发条件"的分钟记入内存 boundaryHistory（供"今日时间点"时间轴查询）
+async function writeBoundarySnapshot() {
+  const now = new Date();
+  const bj  = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+  const h = bj.getHours(), m = bj.getMinutes();
+  if (h < 8 || h >= 17) return;
+
+  const tradeDate = `${bj.getFullYear()}-${String(bj.getMonth()+1).padStart(2,'0')}-${String(bj.getDate()).padStart(2,'0')}`;
+  const snapTime  = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`;
+  const timeStr   = bj.toTimeString().slice(0, 8);
+
+  const rows = [];
+  for (const row of rankingCache) {
+    const symbol = row.symbol;
+    const price  = Number(row.last_price);
+    if (!price) continue;
+
+    const ev = evalBoundaryCondition(symbol);
+    if (!ev.found) continue;
+
+    rows.push([
+      symbol, tradeDate, snapTime,
+      price, Number(row.change_pct), ev.barsCount,
+      ev.winHigh, ev.winLow, ev.priceA, ev.priceB,
+      ev.touchA, ev.touchB, ev.cycleVol,
+      ev.high30, ev.low30, ev.priceA30, ev.priceB30,
+      ev.triggerType, ev.triggered, ev.failReason,
+    ]);
+
+    // 满足触发条件 → 记入内存历史时间轴
+    if (ev.triggered) {
+      if (!boundaryHistory.has(symbol)) boundaryHistory.set(symbol, []);
+      const hist   = boundaryHistory.get(symbol);
+      const minute = timeStr.slice(0, 5);
+      const last   = hist[hist.length - 1];
+      const entry  = {
+        time: timeStr, triggerType: ev.triggerType,
+        touchA: ev.touchA, touchB: ev.touchB,
+        priceA: ev.priceA, priceB: ev.priceB,
+        winHigh: ev.winHigh, winLow: ev.winLow,
+        last_price: price, change_pct: Number(row.change_pct),
+      };
+      if (last && last.time.slice(0, 5) === minute) {
+        hist[hist.length - 1] = entry;
+      } else {
+        hist.push(entry);
+      }
+    }
+  }
+
+  if (rows.length === 0) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('SET statement_timeout = 20000');
+    const BATCH = 500;
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const batch  = rows.slice(i, i + BATCH);
+      const values = [];
+      const params = [];
+      let   pi     = 1;
+      for (const r of batch) {
+        values.push(`($${pi},$${pi+1},$${pi+2},$${pi+3},$${pi+4},$${pi+5},$${pi+6},$${pi+7},$${pi+8},$${pi+9},$${pi+10},$${pi+11},$${pi+12},$${pi+13},$${pi+14},$${pi+15},$${pi+16},$${pi+17},$${pi+18},$${pi+19})`);
+        params.push(...r);
+        pi += 20;
+      }
+      await client.query(`
+        INSERT INTO boundary_alert_snapshot
+          (symbol, trade_date, snap_time,
+           last_price, change_pct, bars_count,
+           win_high, win_low, price_a, price_b,
+           touch_a, touch_b, cycle_vol,
+           high30, low30, price_a30, price_b30,
+           trigger_type, triggered, fail_reason)
+        VALUES ${values.join(',')}
+        ON CONFLICT (symbol, trade_date, snap_time) DO UPDATE SET
+          last_price   = EXCLUDED.last_price,
+          change_pct   = EXCLUDED.change_pct,
+          bars_count   = EXCLUDED.bars_count,
+          win_high     = EXCLUDED.win_high,
+          win_low      = EXCLUDED.win_low,
+          price_a      = EXCLUDED.price_a,
+          price_b      = EXCLUDED.price_b,
+          touch_a      = EXCLUDED.touch_a,
+          touch_b      = EXCLUDED.touch_b,
+          cycle_vol    = EXCLUDED.cycle_vol,
+          high30       = EXCLUDED.high30,
+          low30        = EXCLUDED.low30,
+          price_a30    = EXCLUDED.price_a30,
+          price_b30    = EXCLUDED.price_b30,
+          trigger_type = EXCLUDED.trigger_type,
+          triggered    = EXCLUDED.triggered,
+          fail_reason  = EXCLUDED.fail_reason,
+          created_at   = NOW()
+      `, params);
+    }
+    console.log(`[BoundarySnapshot] Wrote ${rows.length} rows @ ${snapTime}`);
+  } catch (err) {
+    console.error('[BoundarySnapshot] Write failed:', err.message);
+  } finally {
+    await client.query('SET statement_timeout = 0').catch(() => {});
+    client.release();
+  }
+}
+
+// 清理7天前的边界预警快照数据（每天07:55重置时执行）
+async function pruneBoundarySnapshot() {
+  try {
+    const { rowCount } = await pool.query(`
+      DELETE FROM boundary_alert_snapshot
+      WHERE trade_date < current_date - INTERVAL '7 days'
+    `);
+    if (rowCount > 0) console.log(`[BoundarySnapshot] Pruned ${rowCount} old rows`);
+  } catch (err) {
+    console.error('[BoundarySnapshot] Prune failed:', err.message);
+  }
+}
+
 app.get('/health', (req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
@@ -1142,6 +1399,245 @@ app.get('/api/boundary-alerts', (req, res) => {
   } catch (e) {
     console.error('[BoundaryAlerts] API error:', e.message);
     res.status(500).json({ error: 'boundary_alerts_failed' });
+  }
+});
+
+// 把 evalBoundaryCondition / 快照行 转成前端展示用的规则卡片结构
+function buildBoundaryRuleCards(d) {
+  // d 字段统一用驼峰命名访问；调用方负责把数据库快照行（下划线命名）转换好再传入
+
+  // breakout（突破30分钟轨道）这一项只在"触碰次数已达标、且确实进入了30分钟校验"时才有意义；
+  // 在此之前的任何一步失败，都说明流程根本没走到这一步，应显示为"—"（pass=null）
+  const reachedBreakoutStep = d.touchA != null && (d.touchA >= 4 || d.touchB >= 4) && d.triggerType != null;
+  let breakoutPass = null;
+  if (reachedBreakoutStep) {
+    // 走到了30分钟校验这一步：若最终 triggered=true 说明通过；
+    // 若 triggered=false 但 failReason 明确提到"30分钟"，说明卡在这一步（未通过）；
+    // 否则（理论上不会出现）保持 null
+    if (d.triggered) {
+      breakoutPass = true;
+    } else if (d.failReason && d.failReason.includes('30分钟')) {
+      breakoutPass = false;
+    }
+  }
+
+  const rules = [
+    { id: 'range7',  label: '7分钟振幅',  unit: '元',
+      value: (d.winHigh != null && d.winLow != null) ? Number((d.winHigh - d.winLow).toFixed(4)) : null,
+      pass:  (d.winHigh != null && d.winLow != null) ? (d.winHigh - d.winLow) > 0 : null,
+      threshold: '> 0' },
+    { id: 'abs015',  label: '0.15元约束', unit: '元',
+      value: (d.priceA != null && d.winLow != null) ? Number(Math.max(d.priceA - d.winLow, (d.winHigh ?? 0) - (d.priceB ?? 0)).toFixed(4)) : null,
+      pass:  d.priceA != null ? ((d.priceA - d.winLow) < 0.15 && (d.winHigh - d.priceB) < 0.15) : null,
+      threshold: '< 0.15' },
+    { id: 'vol',     label: '周期成交量', unit: '股',
+      value: d.cycleVol != null ? Number(d.cycleVol) : null,
+      pass:  d.cycleVol != null ? Number(d.cycleVol) > 100 : null,
+      threshold: '> 100' },
+    { id: 'touch',   label: '触碰次数',   unit: '根',
+      value: (d.touchA != null && d.touchB != null) ? { a: d.touchA, b: d.touchB } : null,
+      pass:  (d.touchA != null && d.touchB != null) ? (d.touchA >= 4 || d.touchB >= 4) : null,
+      threshold: 'a≥4 或 b≥4' },
+    { id: 'breakout',label: '突破30分钟轨道', unit: '元',
+      value: reachedBreakoutStep ? (d.triggerType === '4a' ? d.priceA : d.priceB) : null,
+      pass:  breakoutPass,
+      threshold: d.triggerType === '4a' ? '落在 [low30, priceA30]' : d.triggerType === '4b' ? '落在 [priceB30, high30]' : '—' },
+  ];
+  return {
+    triggered:    Boolean(d.triggered),
+    failReason:   d.failReason ?? null,
+    triggerType:  d.triggerType ?? null,
+    last_price:   d.lastPrice != null ? Number(d.lastPrice) : null,
+    change_pct:   d.changePct != null ? Number(d.changePct) : null,
+    bars_count:   d.barsCount != null ? Number(d.barsCount) : null,
+    winHigh: d.winHigh, winLow: d.winLow, priceA: d.priceA, priceB: d.priceB,
+    touchA: d.touchA, touchB: d.touchB, cycleVol: d.cycleVol,
+    high30: d.high30, low30: d.low30, priceA30: d.priceA30, priceB30: d.priceB30,
+    rules,
+  };
+}
+
+// 实时检查：不查库，直接用内存 window10m/window30m 实时计算（跟 scanBoundaryAlerts 同一套逻辑）
+// GET /api/boundary-alerts/check?symbol=AAPL
+app.get('/api/boundary-alerts/check', (req, res) => {
+  const symbol = (req.query.symbol || '').trim().toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol required' });
+
+  const row = rankingCache.find(r => r.symbol === symbol);
+  const inRankingCache = Boolean(row);
+  const ev  = evalBoundaryCondition(symbol);
+
+  if (!ev.found) {
+    return res.json({ symbol, found: false, inRankingCache, failReason: ev.failReason });
+  }
+
+  const merged = {
+    ...ev,
+    lastPrice: row ? Number(row.last_price) : null,
+    changePct: row ? Number(row.change_pct) : null,
+  };
+
+  res.json({ symbol, found: true, inRankingCache, ...buildBoundaryRuleCards(merged) });
+});
+
+// 今日时间点：列出今天该股票满足全部触发条件的所有分钟（内存数组，不查库）
+// GET /api/boundary-alerts/history?symbol=AAPL
+app.get('/api/boundary-alerts/history', (req, res) => {
+  const symbol = (req.query.symbol || '').trim().toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol required' });
+  res.json({ symbol, records: boundaryHistory.get(symbol) || [] });
+});
+
+// 单时间点历史诊断：查快照表，返回该分钟的完整规则诊断
+// GET /api/boundary-alerts/diagnose?symbol=AAPL&time=10:23
+app.get('/api/boundary-alerts/diagnose', async (req, res) => {
+  const symbol = (req.query.symbol || '').trim().toUpperCase();
+  const timeQ  = (req.query.time   || '').trim();
+  if (!symbol) return res.status(400).json({ error: 'symbol required' });
+  if (!timeQ)  return res.status(400).json({ error: 'time required, format HH:MM' });
+  const snapTime = timeQ.length === 5 ? timeQ + ':00' : timeQ.slice(0, 8);
+  try {
+    const { rows } = await pool.query(`
+      SELECT * FROM boundary_alert_snapshot
+      WHERE symbol = $1 AND trade_date = current_date AND snap_time = $2::time
+    `, [symbol, snapTime]);
+    if (rows.length === 0) return res.json({ symbol, snap_time: snapTime, found: false });
+    res.json({ symbol, snap_time: snapTime, found: true, ...buildBoundaryRuleCards(snapshotRowToCamel(rows[0])) });
+  } catch (e) {
+    console.error('[BoundaryDiagnose] error:', e.message);
+    res.status(500).json({ error: 'boundary_diagnose_failed' });
+  }
+});
+
+// 时间段历史诊断：返回 [from, to] 内每分钟的快照列表
+// GET /api/boundary-alerts/diagnose-range?symbol=AAPL&from=10:00&to=10:30
+app.get('/api/boundary-alerts/diagnose-range', async (req, res) => {
+  const symbol = (req.query.symbol || '').trim().toUpperCase();
+  const fromQ  = (req.query.from   || '').trim();
+  const toQ    = (req.query.to     || '').trim();
+  if (!symbol) return res.status(400).json({ error: 'symbol required' });
+  if (!fromQ || !toQ) return res.status(400).json({ error: 'from and to required, format HH:MM' });
+  const fromTime = fromQ.length === 5 ? fromQ + ':00' : fromQ.slice(0, 8);
+  const toTime   = toQ.length   === 5 ? toQ   + ':00' : toQ.slice(0, 8);
+  try {
+    const { rows } = await pool.query(`
+      SELECT * FROM boundary_alert_snapshot
+      WHERE symbol     = $1
+        AND trade_date = current_date
+        AND snap_time >= $2::time
+        AND snap_time <= $3::time
+      ORDER BY snap_time ASC
+    `, [symbol, fromTime, toTime]);
+    const records = rows.map(r => ({ snap_time: r.snap_time, ...buildBoundaryRuleCards(snapshotRowToCamel(r)) }));
+    res.json({ symbol, from: fromTime, to: toTime, count: records.length, records });
+  } catch (e) {
+    console.error('[BoundaryDiagnoseRange] error:', e.message);
+    res.status(500).json({ error: 'boundary_diagnose_range_failed' });
+  }
+});
+
+// 数据库快照行（下划线命名）→ 驼峰命名，供 buildBoundaryRuleCards 统一处理
+function snapshotRowToCamel(s) {
+  return {
+    barsCount:   s.bars_count   != null ? Number(s.bars_count)   : null,
+    winHigh:     s.win_high     != null ? Number(s.win_high)     : null,
+    winLow:      s.win_low      != null ? Number(s.win_low)      : null,
+    priceA:      s.price_a      != null ? Number(s.price_a)      : null,
+    priceB:      s.price_b      != null ? Number(s.price_b)      : null,
+    touchA:      s.touch_a      != null ? Number(s.touch_a)      : null,
+    touchB:      s.touch_b      != null ? Number(s.touch_b)      : null,
+    cycleVol:    s.cycle_vol    != null ? Number(s.cycle_vol)    : null,
+    high30:      s.high30       != null ? Number(s.high30)       : null,
+    low30:       s.low30        != null ? Number(s.low30)        : null,
+    priceA30:    s.price_a30    != null ? Number(s.price_a30)    : null,
+    priceB30:    s.price_b30    != null ? Number(s.price_b30)    : null,
+    triggerType: s.trigger_type,
+    triggered:   Boolean(s.triggered),
+    failReason:  s.fail_reason,
+    lastPrice:   s.last_price   != null ? Number(s.last_price)   : null,
+    changePct:   s.change_pct   != null ? Number(s.change_pct)   : null,
+  };
+}
+
+// === 活跃成交股票 API ===
+// 数据源：market_data.active_trading_symbols（外部进程维护，DELETE-based，表内即当前全量活跃股票，
+// 即"1分钟内成交次数>3"这一预警条件，不需要任何时间过滤，直接 SELECT * 即可）
+// 价格/成交量/当日波动 来自 rankingCache 联查；买卖价差来自 quoteCache 联查
+// GET /api/active-trading?price_min=&price_max=&vol_min=&vol_max=&day_range_min=&day_range_max=&spread_min=&spread_max=
+app.get('/api/active-trading', async (req, res) => {
+  try {
+    const q = req.query;
+    const priceMin    = q.price_min     !== undefined && q.price_min     !== '' ? Number(q.price_min)     : null;
+    const priceMax    = q.price_max     !== undefined && q.price_max     !== '' ? Number(q.price_max)     : null;
+    const volMin       = q.vol_min       !== undefined && q.vol_min       !== '' ? Number(q.vol_min)       : null;
+    const volMax       = q.vol_max       !== undefined && q.vol_max       !== '' ? Number(q.vol_max)       : null;
+    const dayRangeMin  = q.day_range_min !== undefined && q.day_range_min !== '' ? Number(q.day_range_min) : null;
+    const dayRangeMax  = q.day_range_max !== undefined && q.day_range_max !== '' ? Number(q.day_range_max) : null;
+    const spreadMin    = q.spread_min    !== undefined && q.spread_min    !== '' ? Number(q.spread_min)    : null;
+    const spreadMax    = q.spread_max    !== undefined && q.spread_max    !== '' ? Number(q.spread_max)    : null;
+
+    const { rows } = await pool.query(`
+      SELECT symbol, trade_count, window_secs, first_detected_at, updated_at
+      FROM market_data.active_trading_symbols
+    `);
+
+    const rankingMap = new Map();
+    for (const row of rankingCache) rankingMap.set(row.symbol, row);
+
+    const results = [];
+    for (const r of rows) {
+      const symbol = r.symbol;
+      const rk     = rankingMap.get(symbol);
+      const quote  = quoteCache.get(symbol);
+
+      const hasMarketData = Boolean(rk);
+      const lastPrice    = rk ? Number(rk.last_price)   : null;
+      const totalVolume  = rk ? Number(rk.total_volume) : null;
+      const highPrice    = rk ? Number(rk.high_price)   : null;
+      const lowPrice     = rk ? Number(rk.low_price)    : null;
+      const dayRange     = (highPrice != null && lowPrice != null) ? Number((highPrice - lowPrice).toFixed(4)) : null;
+      const changePct    = rk ? Number(rk.change_pct)   : null;
+      const spread       = quote ? Number(quote.spread) : null;
+
+      // 筛选条件只对"有行情数据"的股票生效；没有行情数据的股票（hasMarketData=false）
+      // 始终保留在结果里，不受筛选条件影响（按需求：仍显示，但不受筛选条件限制）
+      if (hasMarketData) {
+        if (priceMin    !== null && lastPrice  < priceMin)    continue;
+        if (priceMax    !== null && lastPrice  > priceMax)    continue;
+        if (volMin      !== null && totalVolume < volMin)     continue;
+        if (volMax      !== null && totalVolume > volMax)     continue;
+        if (dayRangeMin !== null && (dayRange === null || dayRange < dayRangeMin)) continue;
+        if (dayRangeMax !== null && (dayRange === null || dayRange > dayRangeMax)) continue;
+        if (spreadMin   !== null && (spread === null || spread < spreadMin)) continue;
+        if (spreadMax   !== null && (spread === null || spread > spreadMax)) continue;
+      }
+
+      results.push({
+        symbol,
+        trade_count:       Number(r.trade_count),
+        window_secs:        Number(r.window_secs),
+        first_detected_at:  r.first_detected_at,
+        updated_at:         r.updated_at,
+        has_market_data:    hasMarketData,
+        last_price:         lastPrice,
+        total_volume:       totalVolume,
+        high_price:         highPrice,
+        low_price:          lowPrice,
+        day_range:          dayRange,
+        change_pct:         changePct,
+        bid:                quote ? Number(quote.bid) : null,
+        ask:                quote ? Number(quote.ask) : null,
+        spread,
+      });
+    }
+
+    // 默认按成交次数降序排（最活跃的在最前）
+    results.sort((a, b) => b.trade_count - a.trade_count);
+
+    res.json({ count: results.length, symbols: results });
+  } catch (e) {
+    console.error('[ActiveTrading] API error:', e.message);
+    res.status(500).json({ error: 'active_trading_failed' });
   }
 });
 
@@ -3300,6 +3796,12 @@ function startAlertMonitor() {
     runScan('StableSnapshot', writeStableSnapshot, 60000);
   }, 55000);
 
+  // ── t=58s：BoundarySnapshot（主池，60s，边界预警历史快照）─────────────────
+  setTimeout(() => {
+    console.log(`[BoundarySnapshot] starting, interval=60s`);
+    runScan('BoundarySnapshot', writeBoundarySnapshot, 60000);
+  }, 58000);
+
   // ── t=0s：VolumeMonitor（主池，300s，立即启动）───────────────────────────
   console.log(`[VolumeMonitor] starting, interval=${VOLUME_SCAN_INTERVAL / 1000}s, ratio>=${VOLUME_RATIO_THRESHOLD}x OR z>=${VOLUME_Z_THRESHOLD}, default_history=${VOLUME_HISTORY_DAYS}d`);
   runScan('VolumeMonitor', scanAllVolumeAlerts, VOLUME_SCAN_INTERVAL);
@@ -3331,6 +3833,7 @@ function startAlertMonitor() {
       lastHistoryClearDate = todayStr;
       stableHistory.clear();
       boundaryAlertMap.clear();
+      boundaryHistory.clear();
       window30m.clear();
       window30mLastBucket = null;
       price30mCache.clear();
@@ -3340,6 +3843,7 @@ function startAlertMonitor() {
       console.log('[Window30m] cleared for new trading day');
       console.log('[Price30mCache] cleared for new trading day');
       pruneStableSnapshot();
+      pruneBoundarySnapshot();
       // initOpenPrice 已改为 runScan 定期补写，跨天自动恢复，无需手动触发
     }
   }, 60000);
@@ -3483,6 +3987,7 @@ app.get('/stable-screener', (req, res) => res.sendFile(path.join(__dirname, '../
 app.get('/oscillator-screener', (req, res) => res.sendFile(path.join(__dirname, '../public/screener-oscillator.html')));
 app.get('/boundary-alerts',     (req, res) => res.sendFile(path.join(__dirname, '../public/boundary-alerts.html')));
 app.get('/volatility',          (req, res) => res.sendFile(path.join(__dirname, '../public/volatility.html')));
+app.get('/active-trading',      (req, res) => res.sendFile(path.join(__dirname, '../public/active-trading.html')));
 
 ensureTables().then(() => {
   startAlertMonitor();
