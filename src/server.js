@@ -338,8 +338,9 @@ async function updatePriceCache() {
     await client.query('SET statement_timeout = 5000');
     const { rows } = await client.query(`
       SELECT DISTINCT ON (symbol) symbol, price::numeric AS price, received_at
-      FROM market_data.tos_trades
+      FROM market_data.tos_trades_bl
       WHERE received_at >= NOW() - INTERVAL '1 minute'
+        AND created_at  >= NOW() - INTERVAL '2 minutes'   -- 分区裁剪(余量1分钟)
         AND price > 0
       ORDER BY symbol, received_at DESC, id DESC
     `);
@@ -360,8 +361,9 @@ async function warmUpPriceCache() {
     await client.query('SET statement_timeout = 15000');
     const { rows } = await client.query(`
       SELECT DISTINCT ON (symbol) symbol, price::numeric AS price, received_at
-      FROM market_data.tos_trades
+      FROM market_data.tos_trades_bl
       WHERE received_at >= NOW() - INTERVAL '30 minutes'
+        AND created_at  >= NOW() - INTERVAL '31 minutes'   -- 分区裁剪
         AND price > 0
       ORDER BY symbol, received_at DESC, id DESC
     `);
@@ -502,9 +504,10 @@ async function updatePriceWindow() {
   try {
     const { rows } = await client.query(`
       SELECT symbol, price::numeric AS price, received_at
-      FROM tos_trades
+      FROM tos_trades_bl
       WHERE received_at >= NOW() - INTERVAL '2 minutes'
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
+        AND created_at  >= NOW() - INTERVAL '3 minutes'   -- 分区裁剪
       ORDER BY symbol, received_at ASC, id ASC
     `);
     priceWindow.clear();
@@ -535,9 +538,10 @@ async function updateWindow10m() {
         MIN(price::numeric)                                                AS low,
         (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close,
         COALESCE(SUM(size::numeric), 0)                                   AS volume
-      FROM tos_trades
+      FROM tos_trades_bl
       WHERE received_at >= NOW() - INTERVAL '10 minutes'
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
+        AND created_at  >= NOW() - INTERVAL '11 minutes'   -- 分区裁剪
         AND price IS NOT NULL
         AND price::numeric > 0
       GROUP BY symbol, date_trunc('minute', received_at AT TIME ZONE 'Asia/Shanghai')
@@ -593,9 +597,10 @@ async function updateWindow30m() {
         MIN(price::numeric)                                                AS low,
         (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close,
         COALESCE(SUM(size::numeric), 0)                                   AS volume
-      FROM tos_trades
+      FROM tos_trades_bl
       WHERE received_at >= $1
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
+        AND created_at  >= $1::timestamptz - INTERVAL '1 minute'   -- 分区裁剪
         AND price IS NOT NULL
         AND price::numeric > 0
       GROUP BY symbol, date_trunc('minute', received_at AT TIME ZONE 'Asia/Shanghai')
@@ -652,10 +657,12 @@ async function updatePrice30mCache() {
         symbol,
         price::numeric AS price,
         received_at    AS at
-      FROM tos_trades
+      FROM tos_trades_bl
       WHERE received_at BETWEEN NOW() - INTERVAL '31 minutes'
                              AND NOW() - INTERVAL '29 minutes'
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
+        AND created_at  BETWEEN NOW() - INTERVAL '32 minutes'
+                            AND NOW() - INTERVAL '28 minutes'   -- 分区裁剪
         AND price IS NOT NULL
         AND price::numeric > 0
       ORDER BY symbol, received_at DESC
@@ -1563,19 +1570,14 @@ function snapshotRowToCamel(s) {
 // 数据源：market_data.active_trading_symbols（外部进程维护，DELETE-based，表内即当前全量活跃股票，
 // 即"1分钟内成交次数>3"这一预警条件，不需要任何时间过滤，直接 SELECT * 即可）
 // 价格/成交量/当日波动 来自 rankingCache 联查；买卖价差来自 quoteCache 联查
-// GET /api/active-trading?price_min=&price_max=&vol_min=&vol_max=&day_range_min=&day_range_max=&spread_min=&spread_max=
+//
+// 注：本接口不做价格/成交量/当日波动/价差筛选，始终返回当前全量活跃股票。
+// 这些筛选条件完全交给前端处理——因为前端有"宽限期保留"机制：股票掉出本接口的返回结果，
+// 会被当作"真正掉出活跃列表"。如果这里按筛选条件过滤，前端就无法分辨"真的掉线"和
+// "仍然活跃只是不满足筛选范围"，会导致被筛掉的股票被误判为掉线、绕过筛选继续展示一段时间。
+// GET /api/active-trading
 app.get('/api/active-trading', async (req, res) => {
   try {
-    const q = req.query;
-    const priceMin    = q.price_min     !== undefined && q.price_min     !== '' ? Number(q.price_min)     : null;
-    const priceMax    = q.price_max     !== undefined && q.price_max     !== '' ? Number(q.price_max)     : null;
-    const volMin       = q.vol_min       !== undefined && q.vol_min       !== '' ? Number(q.vol_min)       : null;
-    const volMax       = q.vol_max       !== undefined && q.vol_max       !== '' ? Number(q.vol_max)       : null;
-    const dayRangeMin  = q.day_range_min !== undefined && q.day_range_min !== '' ? Number(q.day_range_min) : null;
-    const dayRangeMax  = q.day_range_max !== undefined && q.day_range_max !== '' ? Number(q.day_range_max) : null;
-    const spreadMin    = q.spread_min    !== undefined && q.spread_min    !== '' ? Number(q.spread_min)    : null;
-    const spreadMax    = q.spread_max    !== undefined && q.spread_max    !== '' ? Number(q.spread_max)    : null;
-
     const { rows } = await pool.query(`
       SELECT symbol, trade_count, window_secs, first_detected_at, updated_at
       FROM market_data.active_trading_symbols
@@ -1598,19 +1600,6 @@ app.get('/api/active-trading', async (req, res) => {
       const dayRange     = (highPrice != null && lowPrice != null) ? Number((highPrice - lowPrice).toFixed(4)) : null;
       const changePct    = rk ? Number(rk.change_pct)   : null;
       const spread       = quote ? Number(quote.spread) : null;
-
-      // 筛选条件只对"有行情数据"的股票生效；没有行情数据的股票（hasMarketData=false）
-      // 始终保留在结果里，不受筛选条件影响（按需求：仍显示，但不受筛选条件限制）
-      if (hasMarketData) {
-        if (priceMin    !== null && lastPrice  < priceMin)    continue;
-        if (priceMax    !== null && lastPrice  > priceMax)    continue;
-        if (volMin      !== null && totalVolume < volMin)     continue;
-        if (volMax      !== null && totalVolume > volMax)     continue;
-        if (dayRangeMin !== null && (dayRange === null || dayRange < dayRangeMin)) continue;
-        if (dayRangeMax !== null && (dayRange === null || dayRange > dayRangeMax)) continue;
-        if (spreadMin   !== null && (spread === null || spread < spreadMin)) continue;
-        if (spreadMax   !== null && (spread === null || spread > spreadMax)) continue;
-      }
 
       results.push({
         symbol,
@@ -1641,6 +1630,92 @@ app.get('/api/active-trading', async (req, res) => {
   }
 });
 
+
+// === 放量股票 API ===
+// 数据源: market_data.volume_surge_symbols (volume_surge_detector.py 维护,
+// INSERT/UPDATE/DELETE 增量同步,表内即当前全量正在放量的股票,直接 SELECT * 即可)
+// 价格/成交量/当日波动 来自 rankingCache 联查;买卖价差来自 quoteCache 联查
+//
+// 注: 本接口不做任何筛选,始终返回当前全量放量股票。筛选条件全部交给前端,
+// 跟 /api/active-trading 同一套理由(避免"被筛掉=误判为掉出放量")。
+// GET /api/volume-surge
+app.get('/api/volume-surge', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT symbol, recent_volume, baseline_volume, ratio,
+             recent_secs, baseline_secs, first_detected_at, updated_at
+      FROM market_data.volume_surge_symbols
+    `);
+
+    const rankingMap = new Map();
+    for (const row of rankingCache) rankingMap.set(row.symbol, row);
+
+    const results = [];
+    for (const r of rows) {
+      const symbol = r.symbol;
+      const rk     = rankingMap.get(symbol);
+      const quote  = quoteCache.get(symbol);
+
+      const hasMarketData = Boolean(rk);
+      const lastPrice    = rk ? Number(rk.last_price)   : null;
+      const totalVolume  = rk ? Number(rk.total_volume) : null;
+      const highPrice    = rk ? Number(rk.high_price)   : null;
+      const lowPrice     = rk ? Number(rk.low_price)    : null;
+      const dayRange     = (highPrice != null && lowPrice != null) ? Number((highPrice - lowPrice).toFixed(4)) : null;
+      const changePct    = rk ? Number(rk.change_pct)   : null;
+      const spread       = quote ? Number(quote.spread) : null;
+
+      // 速率派生(股/秒);ratio 为 null 时(基准窗口完全没成交)前端会
+      // 把它显示成 ∞,这里直接透传 null 不去填一个虚假的大数。
+      const recentVol    = Number(r.recent_volume);
+      const baselineVol  = Number(r.baseline_volume);
+      const recentSecs   = Number(r.recent_secs);
+      const baselineSecs = Number(r.baseline_secs);
+      const baselineDur  = baselineSecs - recentSecs;
+      const recentRate   = recentSecs   > 0 ? Number((recentVol  / recentSecs).toFixed(2))   : null;
+      const baselineRate = baselineDur  > 0 ? Number((baselineVol / baselineDur).toFixed(2)) : null;
+
+      results.push({
+        symbol,
+        recent_volume:     recentVol,
+        baseline_volume:   baselineVol,
+        ratio:             r.ratio != null ? Number(r.ratio) : null,
+        recent_secs:       recentSecs,
+        baseline_secs:     baselineSecs,
+        recent_rate:       recentRate,
+        baseline_rate:     baselineRate,
+        first_detected_at: r.first_detected_at,
+        updated_at:        r.updated_at,
+        has_market_data:   hasMarketData,
+        last_price:        lastPrice,
+        total_volume:      totalVolume,
+        high_price:        highPrice,
+        low_price:         lowPrice,
+        day_range:         dayRange,
+        change_pct:        changePct,
+        bid:               quote ? Number(quote.bid) : null,
+        ask:               quote ? Number(quote.ask) : null,
+        spread,
+      });
+    }
+
+    // 按 ratio 降序;null(基准为 0,视为无穷大)排最前,
+    // null 之间按 recent_volume 兜底排序
+    results.sort((a, b) => {
+      if (a.ratio === null && b.ratio === null) return b.recent_volume - a.recent_volume;
+      if (a.ratio === null) return -1;
+      if (b.ratio === null) return 1;
+      return b.ratio - a.ratio;
+    });
+
+    res.json({ count: results.length, symbols: results });
+  } catch (e) {
+    console.error('[VolumeSurge] API error:', e.message);
+    res.status(500).json({ error: 'volume_surge_failed' });
+  }
+});
+
+
 // 轻量级价格快照 API
 app.get('/api/price-snapshot', async (req, res) => {
   try {
@@ -1651,17 +1726,19 @@ app.get('/api/price-snapshot', async (req, res) => {
 
     const currentRes = await pool.query(`
       SELECT price::numeric
-      FROM tos_trades
+      FROM tos_trades_bl
       WHERE symbol = $1
+        AND created_at >= NOW() - INTERVAL '1 day'   -- 分区裁剪(假设1天内有成交)
       ORDER BY received_at DESC, id DESC
       LIMIT 1
     `, [symbol]);
 
     const prevRes = await pool.query(`
       SELECT price::numeric
-      FROM tos_trades
+      FROM tos_trades_bl
       WHERE symbol = $1
         AND received_at <= (now() AT TIME ZONE 'Asia/Shanghai' - ($2 || ' minutes')::interval)
+        AND created_at  >= NOW() - INTERVAL '1 day'   -- 分区裁剪
       ORDER BY received_at DESC, id DESC
       LIMIT 1
     `, [symbol, minutes]);
@@ -1701,12 +1778,14 @@ app.get('/api/ohlcv', async (req, res) => {
                  WHEN trim(t.trade_time) ~ '^\\d{4}-\\d{2}-\\d{2}' THEN date_trunc('minute', trim(t.trade_time)::timestamp)
                  ELSE date_trunc('minute', (p.target_date || ' ' || trim(t.trade_time))::timestamp)
                END AS bucket
-        FROM tos_trades t
+        FROM tos_trades_bl t
         JOIN params p ON p.symbol = t.symbol
         WHERE (
           (trim(t.trade_time) ~ '^\\d{4}-\\d{2}-\\d{2}' AND LEFT(trim(t.trade_time), 10) = p.target_date) OR
           (trim(t.trade_time) !~ '^\\d{4}-\\d{2}-\\d{2}' AND DATE(t.created_at) = p.target_date::date)
         )
+          AND t.created_at >= p.target_date::date - INTERVAL '1 day'
+          AND t.created_at <  p.target_date::date + INTERVAL '2 days'   -- 分区裁剪(target_date前后留1天余量)
           AND t.price IS NOT NULL
           AND t.price::numeric > 0
       ),
@@ -2000,21 +2079,21 @@ app.get('/api/test-db', async (req, res) => {
     const tableCheck = await pool.query(`
       SELECT table_name
       FROM information_schema.tables
-      WHERE table_schema = $1 AND table_name = 'tos_trades'
+      WHERE table_schema = $1 AND table_name = 'tos_trades_bl'
     `, [process.env.PGSCHEMA || 'market_data']);
 
     if (tableCheck.rows.length === 0) {
-      return res.json({ error: 'tos_trades table not found', schema: process.env.PGSCHEMA || 'market_data' });
+      return res.json({ error: 'tos_trades_bl table not found', schema: process.env.PGSCHEMA || 'market_data' });
     }
 
     const columns = await pool.query(`
       SELECT column_name, data_type
       FROM information_schema.columns
-      WHERE table_schema = $1 AND table_name = 'tos_trades'
+      WHERE table_schema = $1 AND table_name = 'tos_trades_bl'
       ORDER BY ordinal_position
     `, [process.env.PGSCHEMA || 'market_data']);
 
-    const sample = await pool.query('SELECT * FROM tos_trades LIMIT 3');
+    const sample = await pool.query('SELECT * FROM tos_trades_bl LIMIT 3');
 
     return res.json({
       table_exists: true,
@@ -2210,10 +2289,10 @@ async function snapshotTodayAllMinutes() {
   }
 }
 
-// [FIX 4] refreshRankingCache 不再查 tos_trades，改用内存 priceCache join
+// [FIX 4] refreshRankingCache 不再查 tos_trades_bl，改用内存 priceCache join
 // [OHLCSnapshot] Open/High/Low/Volume 优先从 ohlc_snapshot 取（GetLv1实时值），
 //   ohlc_writer.py 未运行或该股无数据时自动回退到 daily_summary（零中断）
-// Last 继续由 priceCache（tos_trades）提供，链路不变
+// Last 只使用 ohlc_snapshot.last_price（GetLv1 官方值），不再使用 priceCache/quoteCache/close_price 兜底
 async function refreshRankingCache() {
   const client = await pool.connect();
   try {
@@ -2233,7 +2312,8 @@ async function refreshRankingCache() {
         os.symbol,
         -- open_price: 只使用 ohlc_snapshot（GetLv1 官方值），无数据则不进入排名
         os.open_price                             AS open_price,
-        ds.close_price,
+        -- last_price: 只使用 ohlc_snapshot（GetLv1 官方值），不再 join daily_summary.close_price 兜底
+        os.last_price                             AS last_price,
         -- high/low/volume: ohlc_snapshot 优先，无则回退 daily_summary
         COALESCE(os.high_price,  ds.high_price)   AS high_price,
         COALESCE(os.low_price,   ds.low_price)    AS low_price,
@@ -2248,28 +2328,14 @@ async function refreshRankingCache() {
       WHERE os.trade_date = current_date
         AND NOT (os.symbol = ANY($1::text[]))
         AND os.open_price > 0
+        AND os.last_price > 0
     `;
 
     const { rows } = await client.query(sql, [safeEtfList]);
 
     const newCache = rows.map(row => {
-      const cached     = priceCache.get(row.symbol);
-      const quote      = quoteCache.get(row.symbol);
-      const openPrice  = Number(row.open_price);
-      const closePrice = Number(row.close_price) || 0;
-
-      // 優先級：priceCache（tos_trades成交价）> quoteCache mid > close_price > open_price
-      // Last 来源不变，始终来自 priceCache
-      let lastPrice;
-      if (cached) {
-        lastPrice = cached.price;
-      } else if (quote && quote.bid > 0 && quote.ask > 0) {
-        lastPrice = Number(((quote.bid + quote.ask) / 2).toFixed(4));
-      } else if (closePrice > 0) {
-        lastPrice = closePrice;
-      } else {
-        lastPrice = openPrice;
-      }
+      const openPrice = Number(row.open_price);
+      const lastPrice = Number(row.last_price);
 
       const changeAmt = lastPrice - openPrice;
       // 优先使用当前时段10日均量；缓存未就绪时回退到全天均量
@@ -3045,7 +3111,7 @@ app.post('/api/volume/daily-refresh', async (req, res) => {
                   END) AS trade_date,
              SUM(size) AS daily_volume,
              now()
-      FROM tos_trades
+      FROM tos_trades_bl
       WHERE DATE(CASE
                    WHEN trim(trade_time) ~ '^\\d{4}-\\d{2}-\\d{2}' THEN trim(trade_time)::timestamp
                    ELSE created_at
@@ -3053,6 +3119,8 @@ app.post('/api/volume/daily-refresh', async (req, res) => {
                    WHEN trim(trade_time) ~ '^\\d{4}-\\d{2}-\\d{2}' THEN trim(trade_time)::timestamp
                    ELSE created_at
                  END) <= $2::date
+        AND created_at >= $1::date - INTERVAL '1 day'
+        AND created_at <  $2::date + INTERVAL '2 days'   -- 分区裁剪(区间前后各1天余量)
       GROUP BY symbol, trade_date
       ON CONFLICT (symbol, trade_date)
       DO UPDATE SET daily_volume = EXCLUDED.daily_volume, updated_at = now();`;
@@ -3123,12 +3191,14 @@ app.get('/api/volume/cumulative', async (req, res) => {
 
   const sql = `
     SELECT COALESCE(SUM(size), 0) AS cumulative_vol
-    FROM tos_trades
+    FROM tos_trades_bl
     WHERE symbol = $1 AND (
       (trim(trade_time) ~ '^\\d{4}-\\d{2}-\\d{2}' AND trim(trade_time)::timestamp >= $2::timestamp AND trim(trade_time)::timestamp < ($2::date + INTERVAL '1 day'))
       OR
       (trim(trade_time) !~ '^\\d{4}-\\d{2}-\\d{2}' AND created_at >= $2::date AND created_at < ($2::date + INTERVAL '1 day'))
-    );`;
+    )
+      AND created_at >= $2::date - INTERVAL '1 day'
+      AND created_at <  $2::date + INTERVAL '2 days';   -- 分区裁剪`;
 
   const { rows } = await pool.query(sql, [symbol, date]);
   res.json(rows[0]);
@@ -3150,12 +3220,14 @@ app.post('/api/alerts/daily-volume-pct/scan', async (req, res) => {
 
   const cumRes = await pool.query(
     `SELECT COALESCE(SUM(size), 0) AS val, date_trunc('minute', now()) as now_bucket
-     FROM tos_trades
+     FROM tos_trades_bl
      WHERE symbol = $1 AND (
        (trim(trade_time) ~ '^\\d{4}-\\d{2}-\\d{2}' AND trim(trade_time)::timestamp >= $2::timestamp AND trim(trade_time)::timestamp < ($2::date + INTERVAL '1 day'))
        OR
        (trim(trade_time) !~ '^\\d{4}-\\d{2}-\\d{2}' AND created_at >= $2::date AND created_at < ($2::date + INTERVAL '1 day'))
-     )`,
+     )
+       AND created_at >= $2::date - INTERVAL '1 day'
+       AND created_at <  $2::date + INTERVAL '2 days'`,   -- 分区裁剪
     [symbol, date]
   );
   const cum = Number(cumRes.rows[0].val || 0);
@@ -3207,11 +3279,12 @@ async function scanAndInsertAlerts() {
           (t.received_at AT TIME ZONE 'Asia/Shanghai') AS ts_local,
           t.price::numeric AS price,
           date_trunc('minute', (t.received_at AT TIME ZONE 'Asia/Shanghai')) AS bucket_local
-        FROM tos_trades t
+        FROM tos_trades_bl t
         WHERE t.price IS NOT NULL AND t.price::numeric > 0
           AND COALESCE(t.size::numeric, 0) > 0
           AND t.received_at >= ((SELECT prev_bucket_local FROM params) AT TIME ZONE 'Asia/Shanghai')
           AND t.received_at < ((SELECT cur_bucket_local FROM params) AT TIME ZONE 'Asia/Shanghai' + INTERVAL '1 minute')
+          AND t.created_at  >= NOW() - INTERVAL '3 minutes'   -- 分区裁剪(2分钟窗口+1分钟余量)
       ),
       agg AS (
         SELECT symbol, bucket_local AS bucket,
@@ -3282,7 +3355,7 @@ async function ensureVolumeAlertSchema() {
 }
 
 // initOpenPrice：每60秒定期补写，持续覆盖当日 open_price IS NULL 的行
-// 数据源：tos_trades 当日 08:00 至今的第一笔成交（全天范围，覆盖盘中新股）
+// 数据源：tos_trades_bl 当日 08:00 至今的第一笔成交（全天范围，覆盖盘中新股）
 // 只更新 open_price IS NULL 的行，已有开盘价的行不覆盖
 // 无 openPriceDone 限制，新股上市后下一个60秒自动补写
 let _openPriceRunning = false;
@@ -3302,9 +3375,11 @@ async function initOpenPrice() {
       FROM (
         SELECT symbol,
           (array_agg(price::numeric ORDER BY received_at ASC, id ASC))[1] AS open_price
-        FROM market_data.tos_trades
+        FROM market_data.tos_trades_bl
         WHERE received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
           AND received_at <  current_date AT TIME ZONE 'Asia/Shanghai' + interval '9 hours'
+          AND created_at  >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '7 hours'
+          AND created_at  <  current_date AT TIME ZONE 'Asia/Shanghai' + interval '10 hours'   -- 分区裁剪
           AND price IS NOT NULL AND price::numeric > 0
         GROUP BY symbol
       ) correct
@@ -3368,7 +3443,7 @@ async function updateDailySummary() {
 
   const client = await pool.connect();
   try {
-    // ── Step 1：从 tos_trades 增量聚合 upsert（close/high/low）─────────────────
+    // ── Step 1：从 tos_trades_bl 增量聚合 upsert（close/high/low）─────────────────
     // 冷启动（lastDailySummaryRunAt=null）：全量补算当日 08:00 HKT（UTC 00:00）至今
     // 正常增量：只扫 lastDailySummaryRunAt 之后的新成交，数据量约 3000-4000 条/分钟
     // 时段限制：UTC 00:00-09:00（北京时间 08:00-17:00），彻底隔离盘前盘后极值
@@ -3390,10 +3465,12 @@ async function updateDailySummary() {
           (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close_price,
           MAX(price::numeric)                                                AS high_price,
           MIN(price::numeric)                                                AS low_price
-        FROM market_data.tos_trades
+        FROM market_data.tos_trades_bl
         WHERE received_at >= $1::timestamptz
           AND received_at <  $2::timestamptz
           AND received_at <  $4::timestamptz
+          AND created_at  >= $1::timestamptz - INTERVAL '1 minute'
+          AND created_at  <  $2::timestamptz + INTERVAL '1 minute'   -- 分区裁剪
           AND price > 0
         GROUP BY symbol
         ON CONFLICT (symbol, trade_date) DO UPDATE SET
@@ -3452,8 +3529,10 @@ async function scanAllVolumeAlerts() {
     await pool.query(`
       INSERT INTO tos_daily_volume(symbol, trade_date, daily_volume, updated_at)
       SELECT symbol, DATE(received_at), SUM(size), now()
-      FROM tos_trades
+      FROM tos_trades_bl
       WHERE received_at >= $1::date AND received_at < ($1::date + INTERVAL '1 day')
+        AND created_at  >= $1::date - INTERVAL '1 minute'
+        AND created_at  <  ($1::date + INTERVAL '1 day' + INTERVAL '1 minute')   -- 分区裁剪
       GROUP BY symbol, DATE(received_at)
       ON CONFLICT (symbol, trade_date)
       DO UPDATE SET daily_volume = EXCLUDED.daily_volume, updated_at = now()
@@ -3463,10 +3542,12 @@ async function scanAllVolumeAlerts() {
     await pool.query(`
       INSERT INTO tos_daily_volume(symbol, trade_date, daily_volume, updated_at)
       SELECT symbol, DATE(received_at), SUM(size), now()
-      FROM tos_trades
+      FROM tos_trades_bl
       WHERE received_at > $1::timestamptz
         AND received_at < $2::timestamptz
         AND DATE(received_at) = $3::date
+        AND created_at  > $1::timestamptz - INTERVAL '1 minute'
+        AND created_at  < $2::timestamptz + INTERVAL '1 minute'   -- 分区裁剪
       GROUP BY symbol, DATE(received_at)
       ON CONFLICT (symbol, trade_date)
       DO UPDATE SET daily_volume = tos_daily_volume.daily_volume + EXCLUDED.daily_volume,
@@ -3596,10 +3677,11 @@ async function scanIntradayVolumeSurge() {
     const { rows } = await pool.query(`
       WITH window_vol AS (
         SELECT t.symbol, SUM(t.size) AS vol
-        FROM market_data.tos_trades t
+        FROM market_data.tos_trades_bl t
         INNER JOIN market_data.daily_summary ds
           ON ds.symbol = t.symbol AND ds.trade_date = current_date
         WHERE t.received_at >= NOW() - ($1 * INTERVAL '1 minute')
+          AND t.created_at  >= NOW() - (($1 + 1) * INTERVAL '1 minute')   -- 分区裁剪
         GROUP BY t.symbol
       ),
       hist_avg AS (
@@ -3967,6 +4049,166 @@ app.get('/api/volatility/history', async (req, res) => {
   }
 });
 
+// 矩阵视图:横轴时间网格(1分钟一格),每股票一行
+// GET /api/volatility/matrix?date=...&min_sigma=0&limit=300&table=cycles|sliding&metric=sigma|return
+//
+// table:
+//   cycles  (默认) → volatility_cycles        ── 不重叠 5 分钟周期,每 5 分钟 1 条 cycle
+//   sliding         → volatility_cycles_sliding ── 滑动窗口,每分钟 1 条 cycle
+//
+// metric:
+//   sigma   (默认) → 每格放 sigma_pct,落在 cycle_end 那一分钟
+//   return          → 每格放 r%(收益率),展开规则随 table 而定:
+//                     · cycles+return  → 每条 cycle 展开 5 个 r,5 个分钟格连续填充
+//                     · sliding+return → 每条 cycle 只取 r5(=ln(c5/c4),即 cycle_end 这一分钟的 return),
+//                                        每分钟一格无重复
+//
+// 时段:from/to(HH:MM),默认 08:05 ~ 当日最晚 cycle_end
+//
+// 返回:
+//   { table, metric, times, rows: [ { symbol, values: { "08:05": 0.96, ... } } ] }
+app.get('/api/volatility/matrix', async (req, res) => {
+  const date     = String(req.query.date     || '').trim() || new Date().toISOString().slice(0,10);
+  const minSigma = parseFloat(req.query.min_sigma || '0') || 0;
+  const limit    = Math.min(parseInt(req.query.limit  || '300'), 1000);
+  const from     = String(req.query.from || '').trim();
+  const to       = String(req.query.to   || '').trim();
+  const metric   = String(req.query.metric || 'sigma').trim().toLowerCase();
+  const isReturn = (metric === 'return' || metric === 'r');
+  const table    = String(req.query.table  || 'cycles').trim().toLowerCase();
+  const isSliding = (table === 'sliding');
+
+  // 表名白名单(防 SQL 注入,因为 PG 参数化不能用于标识符)
+  const tableName = isSliding
+    ? 'market_data.volatility_cycles_sliding'
+    : 'market_data.volatility_cycles';
+
+  try {
+    // 1) 拉当日全部 cycle。
+    //    sigma 模式:只要 cycle_end + sigma_pct
+    //    cycles+return:要 cycle_start + cycle_end + r1..r5(为展开 5 分钟)
+    //    sliding+return:只要 cycle_end + r5(滑动每分钟已经天然有一条,无需展开)
+    let selectCols;
+    if (!isReturn) {
+      selectCols = `
+        symbol,
+        TO_CHAR(date_trunc('minute', cycle_end), 'HH24:MI') AS t,
+        sigma_pct`;
+    } else if (isSliding) {
+      // sliding+return:r5 = ln(c5/c4),正好对应 cycle_end 那一分钟
+      selectCols = `
+        symbol,
+        TO_CHAR(date_trunc('minute', cycle_end), 'HH24:MI') AS t,
+        r5 AS r`;
+    } else {
+      // cycles+return:需要展开 5 个分钟,要 cycle_start 起点
+      selectCols = `
+        symbol,
+        TO_CHAR(date_trunc('minute', cycle_start), 'HH24:MI') AS t_start,
+        TO_CHAR(date_trunc('minute', cycle_end),   'HH24:MI') AS t_end,
+        sigma_pct,
+        r1, r2, r3, r4, r5`;
+    }
+
+    const { rows: cells } = await pool.query(`
+      SELECT ${selectCols}
+      FROM ${tableName}
+      WHERE trade_date = $1::date
+        AND sigma_pct  >= $2
+      ORDER BY symbol, cycle_end
+    `, [date, minSigma]);
+
+    if (!cells.length) return res.json({ table: isSliding ? 'sliding' : 'cycles', metric: isReturn ? 'return' : 'sigma', times: [], rows: [] });
+
+    // 2) 时间网格起止
+    let allT;
+    if (isReturn && !isSliding) {
+      allT = cells.flatMap(c => [c.t_start, c.t_end]);
+    } else {
+      allT = cells.map(c => c.t);
+    }
+    allT.sort();
+    const startStr = from || allT[0];
+    const endStr   = to   || allT[allT.length - 1];
+
+    // 3) 生成连续每分钟时间格
+    const { rows: gridRows } = await pool.query(`
+      SELECT TO_CHAR(g, 'HH24:MI') AS t
+      FROM generate_series(
+        ($1::date + $2::time)::timestamp,
+        ($1::date + $3::time)::timestamp,
+        interval '1 minute'
+      ) g
+    `, [date, startStr + ':00', endStr + ':00']);
+    const times   = gridRows.map(r => r.t);
+    const timeIdx = new Map(times.map((t, i) => [t, i]));
+
+    // 4) 按 symbol 分组,按规则填值
+    const bySym = new Map();
+
+    if (!isReturn) {
+      // —— sigma 模式 ——
+      for (const c of cells) {
+        let e = bySym.get(c.symbol);
+        if (!e) { e = { symbol: c.symbol, values: {}, rank: 0 };
+                  bySym.set(c.symbol, e); }
+        const v = parseFloat(c.sigma_pct);
+        const prev = e.values[c.t];
+        if (prev === undefined || v > prev) e.values[c.t] = v;
+        if (v > e.rank) e.rank = v;
+      }
+    } else if (isSliding) {
+      // —— sliding + return —— 每条 cycle 一个 r5,直接落 cycle_end 那一格
+      for (const c of cells) {
+        let e = bySym.get(c.symbol);
+        if (!e) { e = { symbol: c.symbol, values: {}, rank: 0 };
+                  bySym.set(c.symbol, e); }
+        const v = parseFloat(c.r) * 100;   // r 是小数,× 100 转 %
+        if (!Number.isFinite(v)) continue;
+        const prev = e.values[c.t];
+        if (prev === undefined || Math.abs(v) > Math.abs(prev)) e.values[c.t] = v;
+        if (Math.abs(v) > e.rank) e.rank = Math.abs(v);
+      }
+    } else {
+      // —— cycles + return —— 每条 cycle 展开 5 个 r 落到 5 个分钟格
+      for (const c of cells) {
+        let e = bySym.get(c.symbol);
+        if (!e) { e = { symbol: c.symbol, values: {}, rank: 0 };
+                  bySym.set(c.symbol, e); }
+        const startI = timeIdx.get(c.t_start);
+        if (startI === undefined) continue;
+        const rs = [c.r1, c.r2, c.r3, c.r4, c.r5];
+        for (let k = 0; k < 5; k++) {
+          const idx = startI + k;
+          if (idx >= times.length) break;
+          const t = times[idx];
+          const v = parseFloat(rs[k]) * 100;
+          if (!Number.isFinite(v)) continue;
+          const prev = e.values[t];
+          if (prev === undefined || Math.abs(v) > Math.abs(prev)) e.values[t] = v;
+          if (Math.abs(v) > e.rank) e.rank = Math.abs(v);
+        }
+      }
+    }
+
+    // 5) 按排序键降序,截 limit
+    const out = [...bySym.values()]
+      .sort((a, b) => b.rank - a.rank)
+      .slice(0, limit)
+      .map(({ symbol, values }) => ({ symbol, values }));
+
+    res.json({
+      table:  isSliding ? 'sliding' : 'cycles',
+      metric: isReturn  ? 'return'  : 'sigma',
+      times,
+      rows: out,
+    });
+  } catch (e) {
+    console.error('[volatility/matrix]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // 静态文件服务
 app.use(express.static(path.join(__dirname, '../public'), {
     setHeaders: (res) => {
@@ -3988,6 +4230,7 @@ app.get('/oscillator-screener', (req, res) => res.sendFile(path.join(__dirname, 
 app.get('/boundary-alerts',     (req, res) => res.sendFile(path.join(__dirname, '../public/boundary-alerts.html')));
 app.get('/volatility',          (req, res) => res.sendFile(path.join(__dirname, '../public/volatility.html')));
 app.get('/active-trading',      (req, res) => res.sendFile(path.join(__dirname, '../public/active-trading.html')));
+app.get('/volume-surge',        (req, res) => res.sendFile(path.join(__dirname, '../public/volume-surge.html')));
 
 ensureTables().then(() => {
   startAlertMonitor();

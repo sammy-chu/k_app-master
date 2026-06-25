@@ -1464,10 +1464,11 @@ app.get('/api/boundary-alerts/check', (req, res) => {
   if (!symbol) return res.status(400).json({ error: 'symbol required' });
 
   const row = rankingCache.find(r => r.symbol === symbol);
+  const inRankingCache = Boolean(row);
   const ev  = evalBoundaryCondition(symbol);
 
   if (!ev.found) {
-    return res.json({ symbol, found: false, failReason: ev.failReason });
+    return res.json({ symbol, found: false, inRankingCache, failReason: ev.failReason });
   }
 
   const merged = {
@@ -1476,7 +1477,7 @@ app.get('/api/boundary-alerts/check', (req, res) => {
     changePct: row ? Number(row.change_pct) : null,
   };
 
-  res.json({ symbol, found: true, ...buildBoundaryRuleCards(merged) });
+  res.json({ symbol, found: true, inRankingCache, ...buildBoundaryRuleCards(merged) });
 });
 
 // 今日时间点：列出今天该股票满足全部触发条件的所有分钟（内存数组，不查库）
@@ -1557,6 +1558,71 @@ function snapshotRowToCamel(s) {
     changePct:   s.change_pct   != null ? Number(s.change_pct)   : null,
   };
 }
+
+// === 活跃成交股票 API ===
+// 数据源：market_data.active_trading_symbols（外部进程维护，DELETE-based，表内即当前全量活跃股票，
+// 即"1分钟内成交次数>3"这一预警条件，不需要任何时间过滤，直接 SELECT * 即可）
+// 价格/成交量/当日波动 来自 rankingCache 联查；买卖价差来自 quoteCache 联查
+//
+// 注：本接口不做价格/成交量/当日波动/价差筛选，始终返回当前全量活跃股票。
+// 这些筛选条件完全交给前端处理——因为前端有"宽限期保留"机制：股票掉出本接口的返回结果，
+// 会被当作"真正掉出活跃列表"。如果这里按筛选条件过滤，前端就无法分辨"真的掉线"和
+// "仍然活跃只是不满足筛选范围"，会导致被筛掉的股票被误判为掉线、绕过筛选继续展示一段时间。
+// GET /api/active-trading
+app.get('/api/active-trading', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT symbol, trade_count, window_secs, first_detected_at, updated_at
+      FROM market_data.active_trading_symbols
+    `);
+
+    const rankingMap = new Map();
+    for (const row of rankingCache) rankingMap.set(row.symbol, row);
+
+    const results = [];
+    for (const r of rows) {
+      const symbol = r.symbol;
+      const rk     = rankingMap.get(symbol);
+      const quote  = quoteCache.get(symbol);
+
+      const hasMarketData = Boolean(rk);
+      const lastPrice    = rk ? Number(rk.last_price)   : null;
+      const totalVolume  = rk ? Number(rk.total_volume) : null;
+      const highPrice    = rk ? Number(rk.high_price)   : null;
+      const lowPrice     = rk ? Number(rk.low_price)    : null;
+      const dayRange     = (highPrice != null && lowPrice != null) ? Number((highPrice - lowPrice).toFixed(4)) : null;
+      const changePct    = rk ? Number(rk.change_pct)   : null;
+      const spread       = quote ? Number(quote.spread) : null;
+
+      results.push({
+        symbol,
+        trade_count:       Number(r.trade_count),
+        window_secs:        Number(r.window_secs),
+        first_detected_at:  r.first_detected_at,
+        updated_at:         r.updated_at,
+        has_market_data:    hasMarketData,
+        last_price:         lastPrice,
+        total_volume:       totalVolume,
+        high_price:         highPrice,
+        low_price:          lowPrice,
+        day_range:          dayRange,
+        change_pct:         changePct,
+        bid:                quote ? Number(quote.bid) : null,
+        ask:                quote ? Number(quote.ask) : null,
+        spread,
+      });
+    }
+
+    // 默认按成交次数降序排（最活跃的在最前）
+    results.sort((a, b) => b.trade_count - a.trade_count);
+
+    res.json({ count: results.length, symbols: results });
+  } catch (e) {
+    console.error('[ActiveTrading] API error:', e.message);
+    res.status(500).json({ error: 'active_trading_failed' });
+  }
+});
+
 
 // 轻量级价格快照 API
 app.get('/api/price-snapshot', async (req, res) => {
@@ -3904,6 +3970,7 @@ app.get('/stable-screener', (req, res) => res.sendFile(path.join(__dirname, '../
 app.get('/oscillator-screener', (req, res) => res.sendFile(path.join(__dirname, '../public/screener-oscillator.html')));
 app.get('/boundary-alerts',     (req, res) => res.sendFile(path.join(__dirname, '../public/boundary-alerts.html')));
 app.get('/volatility',          (req, res) => res.sendFile(path.join(__dirname, '../public/volatility.html')));
+app.get('/active-trading',      (req, res) => res.sendFile(path.join(__dirname, '../public/active-trading.html')));
 
 ensureTables().then(() => {
   startAlertMonitor();

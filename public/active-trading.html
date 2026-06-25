@@ -215,6 +215,42 @@
     color: #888; margin-left: 5px; vertical-align: middle;
   }
 
+  /* ── 宽限期保留行（已掉出活跃列表，仍在保留期内显示）── */
+  tr.grace-row td {
+    background-color: rgba(240, 160, 32, 0.06);
+  }
+  tr.grace-row:hover td {
+    background-color: rgba(240, 160, 32, 0.12);
+  }
+  tr.grace-row td:first-child {
+    border-left: 3px solid #f0a02066;
+  }
+  tr.grace-row .sym {
+    color: #f0c060;
+  }
+  /* 置顶保留档（成交次数达标，保留5分钟并置顶）：颜色更深更醒目 */
+  tr.grace-row.grace-pinned td {
+    background-color: rgba(240, 160, 32, 0.11);
+  }
+  tr.grace-row.grace-pinned:hover td {
+    background-color: rgba(240, 160, 32, 0.17);
+  }
+  tr.grace-row.grace-pinned td:first-child {
+    border-left: 3px solid #f0a020;
+  }
+  tr.grace-row.grace-pinned .sym {
+    color: #ffb74d;
+  }
+  .grace-badge {
+    font-size: 10px; padding: 1px 5px; border-radius: 2px;
+    background: #f0a02022; border: 1px solid #f0a02055;
+    color: #f0c060; margin-left: 5px; vertical-align: middle; white-space: nowrap;
+  }
+  .grace-badge.pinned {
+    background: #f0a02038; border: 1px solid #f0a02088;
+    color: #ffb74d; font-weight: 600;
+  }
+
   .empty-row td { text-align: center; padding: 60px; color: #555; }
   .spinner {
     display: inline-block; width: 14px; height: 14px;
@@ -388,7 +424,17 @@ let blockedStocks = JSON.parse(localStorage.getItem('sharedBlockedStocks') || '[
 
 const FILTER_IDS = ['priceMin','priceMax','volMin','volMax','dayRangeMin','dayRangeMax','spreadMin','spreadMax'];
 
+// ── 宽限期保留：股票掉出活跃列表后，按掉线前成交次数保留一段时间再彻底移除 ──
+const GRACE_LOW_MS  = 2 * 60 * 1000;  // 成交次数 < 10：保留 2 分钟
+const GRACE_HIGH_MS = 5 * 60 * 1000;  // 成交次数 >= 10：保留 5 分钟并置顶
+const GRACE_HIGH_THRESHOLD = 10;
+let trackedMap = new Map(); // symbol -> 行数据（跨多次拉取持久化，承载宽限期状态）
+
 // ── FETCH ────────────────────────────────────────────────────────────────
+// 注：价格/成交量/当日波动/价差筛选完全在前端 applyFilter() 中处理，不向后端传递，
+// 因为后端 active_trading_symbols 表的语义是"当前全量活跃股票"——一旦按这些条件筛选，
+// 前端宽限期保留逻辑（mergeFreshData）就无法分辨"真的掉出活跃列表"和"仅仅不满足筛选范围"，
+// 会把被筛掉的股票误判为已掉线，导致筛选条件被宽限期机制绕过、看起来"时好时坏"。
 let isFetching = false;
 async function fetchData() {
   if (isFetching) return;
@@ -396,32 +442,11 @@ async function fetchData() {
   const dot  = document.getElementById('status-dot');
   const stxt = document.getElementById('status-text');
   try {
-    const params = {};
-    const priceMin    = getV('priceMin');
-    const priceMax    = getV('priceMax');
-    const volMin      = getV('volMin');
-    const volMax      = getV('volMax');
-    const dayRangeMin = getV('dayRangeMin');
-    const dayRangeMax = getV('dayRangeMax');
-    const spreadMin   = getV('spreadMin');
-    const spreadMax   = getV('spreadMax');
-    if (priceMin    !== null) params.price_min     = priceMin;
-    if (priceMax    !== null) params.price_max     = priceMax;
-    if (volMin      !== null) params.vol_min       = volMin;
-    if (volMax      !== null) params.vol_max       = volMax;
-    if (dayRangeMin !== null) params.day_range_min = dayRangeMin;
-    if (dayRangeMax !== null) params.day_range_max = dayRangeMax;
-    if (spreadMin   !== null) params.spread_min    = spreadMin;
-    if (spreadMax   !== null) params.spread_max    = spreadMax;
-
-    const qs = Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-    const res = await fetch(`/api/active-trading${qs ? '?'+qs : ''}`);
+    const res = await fetch('/api/active-trading');
     if (!res.ok) throw new Error(res.status);
     const json = await res.json();
-    allData = json.symbols || [];
-    for (const r of allData) {
-      r._firstDetectedMs = r.first_detected_at ? new Date(r.first_detected_at).getTime() : null;
-    }
+    mergeFreshData(json.symbols || []);
+
     maxVol = allData.reduce((m, r) => Math.max(m, Number(r.total_volume)||0), 1);
 
     if (dot) dot.className = 'status-dot live';
@@ -435,6 +460,47 @@ async function fetchData() {
   } finally {
     isFetching = false;
   }
+}
+
+// ── 合并本次拉取结果到 trackedMap，处理掉出活跃列表股票的宽限期保留 ──────────
+function mergeFreshData(freshRows) {
+  const now = Date.now();
+  const freshSymbols = new Set();
+
+  for (const r of freshRows) {
+    freshSymbols.add(r.symbol);
+    r._firstDetectedMs = r.first_detected_at ? new Date(r.first_detected_at).getTime() : null;
+    r._active = true;
+    r._graceUntilMs = null;
+    r._pinned = false;
+    trackedMap.set(r.symbol, r);
+  }
+
+  const toDelete = [];
+  for (const [sym, row] of trackedMap) {
+    if (freshSymbols.has(sym)) continue; // 本次仍在活跃列表中
+
+    if (row._active === false) {
+      // 已处于宽限期，检查是否到期
+      if (row._graceUntilMs != null && now >= row._graceUntilMs) toDelete.push(sym);
+      continue;
+    }
+
+    // 本次首次掉出活跃列表
+    if (!row.has_market_data) {
+      // 本就没有行情数据、从未展示过，无需保留
+      toDelete.push(sym);
+      continue;
+    }
+    const tc = Number(row.trade_count) || 0;
+    const isHigh = tc >= GRACE_HIGH_THRESHOLD;
+    row._active = false;
+    row._pinned = isHigh;
+    row._graceUntilMs = now + (isHigh ? GRACE_HIGH_MS : GRACE_LOW_MS);
+  }
+  toDelete.forEach(sym => trackedMap.delete(sym));
+
+  allData = Array.from(trackedMap.values());
 }
 
 // ── APPLY FILTER & SORT ───────────────────────────────────────────────────
@@ -452,9 +518,12 @@ function applyFilter() {
   const filtered = allData.filter(row => {
     if (blockedStocks.includes(row.symbol)) return false;
 
-    // 没有行情数据的股票始终保留，不受筛选条件影响
-    if (!row.has_market_data) return true;
+    // 没有行情数据的股票直接过滤掉，不在列表中显示
+    if (!row.has_market_data) return false;
 
+    // 宽限期内的股票（已掉出活跃列表，仍在保留期）同样受筛选条件约束，
+    // 只是用掉线前最后一次的数据快照参与判断——宽限期只负责延迟移除时机，
+    // 不应成为绕开筛选条件的后门。
     const price    = Number(row.last_price)  || 0;
     const vol      = Number(row.total_volume) || 0;
     const dayRange = row.day_range != null ? Number(row.day_range) : null;
@@ -471,6 +540,11 @@ function applyFilter() {
   });
 
   sortedData = [...filtered].sort((a, b) => {
+    // 高保留档（成交次数>=10的宽限期股票）始终置顶，组内仍按当前排序列比较
+    const pinA = a._pinned ? 0 : 1;
+    const pinB = b._pinned ? 0 : 1;
+    if (pinA !== pinB) return pinA - pinB;
+
     const va = sortKey === 'symbol'
       ? a[sortKey]
       : sortKey === 'first_detected_at'
@@ -484,8 +558,9 @@ function applyFilter() {
     return va < vb ? sortDir : va > vb ? -sortDir : 0;
   });
 
+  const activeCount = allData.filter(r => r._active !== false).length;
   document.getElementById('count-info').textContent =
-    `活跃 ${allData.length} 只 · 显示 ${sortedData.length} 只`;
+    `活跃 ${activeCount} 只 · 显示 ${sortedData.length} 只`;
 
   renderTable();
 }
@@ -556,20 +631,6 @@ function renderTable() {
 }
 
 function buildRowHTML(r) {
-  if (!r.has_market_data) {
-    return `<tr data-sym="${r.symbol}">
-      <td><div class="symbol-cell"><span class="sym">${r.symbol}</span><button class="btn-block-inline" onclick="blockStock('${r.symbol}')" title="屏蔽此股票">×</button><span class="nodata-badge">无行情数据</span></div></td>
-      <td class="no-data">—</td>
-      <td class="no-data">—</td>
-      <td class="no-data">—</td>
-      <td class="no-data">—</td>
-      <td class="no-data">—</td>
-      <td class="no-data">—</td>
-      <td>${r.trade_count}</td>
-      <td style="color:#888;font-size:12px;">${fmtTime(r.first_detected_at)}</td>
-    </tr>`;
-  }
-
   const pct  = Number(r.change_pct) || 0;
   const pcls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
   const sign = pct > 0 ? '+' : '';
@@ -578,8 +639,14 @@ function buildRowHTML(r) {
   const bidAsk = (r.bid != null && r.ask != null) ? `${fmt(r.bid,3)} / ${fmt(r.ask,3)}` : '—';
   const spreadStr = r.spread != null ? fmt(r.spread, 4) : '—';
 
-  return `<tr data-sym="${r.symbol}">
-    <td><div class="symbol-cell"><span class="sym">${r.symbol}</span><button class="btn-block-inline" onclick="blockStock('${r.symbol}')" title="屏蔽此股票">×</button></div></td>
+  const isGrace   = r._active === false;
+  const rowClass  = isGrace ? (r._pinned ? ' grace-row grace-pinned' : ' grace-row') : '';
+  const graceBadge = isGrace
+    ? `<span class="grace-badge${r._pinned ? ' pinned' : ''}">${r._pinned ? '置顶保留中' : '保留中'}</span>`
+    : '';
+
+  return `<tr data-sym="${r.symbol}" class="${rowClass.trim()}">
+    <td><div class="symbol-cell"><span class="sym">${r.symbol}</span><button class="btn-block-inline" onclick="blockStock('${r.symbol}')" title="屏蔽此股票">×</button>${graceBadge}</div></td>
     <td class="${pcls}">${fmt(r.last_price, 2)}</td>
     <td class="${pcls}">${sign}${pct.toFixed(2)}%</td>
     <td><div class="vol-cell">${fmtVol(vol)}<div class="mini-bar"><div class="mini-bar-fill" style="width:${vPct.toFixed(1)}%"></div></div></div></td>
