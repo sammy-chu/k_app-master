@@ -1795,12 +1795,15 @@ app.get('/api/l2-active-orders', async (req, res) => {
         a.price_ratio, a.median_vol, a.first_seen, a.last_seen, a.alive_rounds,
         -- 与 ranking 页面一致：ohlc_snapshot.volume 优先，无则回退 daily_summary.total_volume
         COALESCE(os.volume, d.total_volume, 0) AS total_volume,
-        os.open_price AS open_price
+        os.open_price AS open_price,
+        lp.price AS lp_last_price
       FROM ${table} a
       LEFT JOIN market_data.daily_summary d
              ON d.symbol = a.stock_code AND d.trade_date = CURRENT_DATE
       LEFT JOIN market_data.ohlc_snapshot os
              ON os.symbol = a.stock_code AND os.trade_date = CURRENT_DATE
+      LEFT JOIN market_data.last_price lp
+             ON lp.symbol = a.stock_code
       WHERE a.trade_date = CURRENT_DATE
       ORDER BY a.price_ratio DESC NULLS LAST
     `;
@@ -1810,8 +1813,10 @@ app.get('/api/l2-active-orders', async (req, res) => {
     const enriched = rows.map(row => {
       const openPrice = Number(row.open_price);
       if (!openPrice) return { ...row, day_change_pct: null, day_change_amt: null };
+      // last_price 优先级: market_data.last_price(新表，逐笔成交) > priceCache(tos_trades) > 挂单价
+      const lpPrice   = Number(row.lp_last_price) || 0;
       const cached    = priceCache.get(row.stock_code);
-      const lastPrice = cached ? cached.price : Number(row.price);
+      const lastPrice = lpPrice > 0 ? lpPrice : (cached ? cached.price : Number(row.price));
       const changeAmt = lastPrice - openPrice;
       const changePct = Number((changeAmt / openPrice * 100).toFixed(2));
       return {
@@ -1909,12 +1914,15 @@ app.get('/api/l2-alert-history', async (req, res) => {
                h.price_change_abs, h.price_change_ratio, h.volume_change_abs, h.volume_change_ratio,
                h.level_delta, h.alert_message, h.created_at,
                COALESCE(d.total_volume, 0) AS total_volume,
-               os.open_price AS open_price
+               os.open_price AS open_price,
+               lp.price AS lp_last_price
         FROM ${table} h
         LEFT JOIN market_data.daily_summary d
                ON d.symbol = h.stock_code AND d.trade_date = CURRENT_DATE
         LEFT JOIN market_data.ohlc_snapshot os
                ON os.symbol = h.stock_code AND os.trade_date = CURRENT_DATE
+        LEFT JOIN market_data.last_price lp
+               ON lp.symbol = h.stock_code
         WHERE h.trend_type NOT IN ('gone', 'moved')
           ${timeFilter}
         ORDER BY h.stock_code, h.alert_type, ROUND(h.price::numeric, 4), h.created_at DESC
@@ -1925,13 +1933,14 @@ app.get('/api/l2-alert-history', async (req, res) => {
 
     const { rows } = await pricePool.query(sql, params);
 
-    // 用 priceCache 实时计算当日涨跌幅，与 /api/ranking 逻辑保持一致
+    // last_price 优先级: market_data.last_price(新表，逐笔成交) > priceCache(tos_trades) > 挂单价
     const enriched = rows.map(row => {
       const openPrice = Number(row.open_price);
       if (!openPrice) return { ...row, day_change_pct: null, day_change_amt: null };
 
-      const cached   = priceCache.get(row.stock_code);
-      const lastPrice = cached ? cached.price : Number(row.price); // 兜底用挂单价
+      const lpPrice   = Number(row.lp_last_price) || 0;
+      const cached    = priceCache.get(row.stock_code);
+      const lastPrice = lpPrice > 0 ? lpPrice : (cached ? cached.price : Number(row.price)); // 兜底用挂单价
       const changeAmt = lastPrice - openPrice;
       const changePct = Number((changeAmt / openPrice * 100).toFixed(2));
 
@@ -2193,10 +2202,11 @@ async function snapshotTodayAllMinutes() {
   }
 }
 
-// [FIX 4] refreshRankingCache 不再查 tos_trades，改用内存 priceCache join
 // [OHLCSnapshot] Open/High/Low/Volume 优先从 ohlc_snapshot 取（GetLv1实时值），
 //   ohlc_writer.py 未运行或该股无数据时自动回退到 daily_summary（零中断）
-// Last 继续由 priceCache（tos_trades）提供，链路不变
+// Last 优先级: market_data.last_price(新表，逐笔成交) > ohlc_snapshot.last_price
+//   (GetLv1轮询值) > open_price。priceCache/quoteCache/close_price 不再参与这条
+//   链路(那两个 Map 本身没删，/api/l2-active-orders 等其他接口还在用)。
 async function refreshRankingCache() {
   const client = await pool.connect();
   try {
@@ -2216,7 +2226,8 @@ async function refreshRankingCache() {
         os.symbol,
         -- open_price: 只使用 ohlc_snapshot（GetLv1 官方值），无数据则不进入排名
         os.open_price                             AS open_price,
-        ds.close_price,
+        os.last_price                             AS os_last_price,
+        lp.price                                  AS lp_last_price,
         -- high/low/volume: ohlc_snapshot 优先，无则回退 daily_summary
         COALESCE(os.high_price,  ds.high_price)   AS high_price,
         COALESCE(os.low_price,   ds.low_price)    AS low_price,
@@ -2227,6 +2238,8 @@ async function refreshRankingCache() {
       LEFT JOIN market_data.daily_summary ds
              ON ds.symbol = os.symbol
             AND ds.trade_date = current_date
+      LEFT JOIN market_data.last_price lp
+             ON lp.symbol = os.symbol
       LEFT JOIN avg_vol a ON a.symbol = os.symbol
       WHERE os.trade_date = current_date
         AND NOT (os.symbol = ANY($1::text[]))
@@ -2236,20 +2249,17 @@ async function refreshRankingCache() {
     const { rows } = await client.query(sql, [safeEtfList]);
 
     const newCache = rows.map(row => {
-      const cached     = priceCache.get(row.symbol);
-      const quote      = quoteCache.get(row.symbol);
-      const openPrice  = Number(row.open_price);
-      const closePrice = Number(row.close_price) || 0;
+      const lpPrice   = Number(row.lp_last_price) || 0;
+      const osPrice   = Number(row.os_last_price) || 0;
+      const openPrice = Number(row.open_price);
 
-      // 優先級：priceCache（tos_trades成交价）> quoteCache mid > close_price > open_price
-      // Last 来源不变，始终来自 priceCache
+      // 優先級：market_data.last_price(新表，逐笔成交) > ohlc_snapshot.last_price
+      //        (GetLv1轮询值) > open_price
       let lastPrice;
-      if (cached) {
-        lastPrice = cached.price;
-      } else if (quote && quote.bid > 0 && quote.ask > 0) {
-        lastPrice = Number(((quote.bid + quote.ask) / 2).toFixed(4));
-      } else if (closePrice > 0) {
-        lastPrice = closePrice;
+      if (lpPrice > 0) {
+        lastPrice = lpPrice;
+      } else if (osPrice > 0) {
+        lastPrice = osPrice;
       } else {
         lastPrice = openPrice;
       }

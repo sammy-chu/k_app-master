@@ -162,20 +162,20 @@
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
       <h1>K Chart MVP - 股票K线图</h1>
       <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-        <a href="/" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">📈 K线图表</a>
+        <a href="/" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">📈 K线图�?/a>
         <a href="/alerts" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">🚨 价格提醒</a>
-        <a href="/volume-alerts" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">📊 成交量提醒</a>
+        <a href="/volume-alerts" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">📊 成交量提�?/a>
         <a href="/hills" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">⛰️ 山丘扫描</a>
         <a href="/hill-alerts" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">⛰️ 山丘提醒</a>
         <a href="/ranking" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">涨跌排名</a>
         <a href="/l2-alerts" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">L2大单</a>
-        <a href="/screener" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">选股器</a>
+        <a href="/screener" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">选股�?/a>
         <a href="/stable-screener" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">稳定选股</a>
         <a href="/swing-screener" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">波段扫描</a>
         <a href="/oscillator-screener" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">震荡选股</a>
         <a href="/boundary-alerts" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">边界预警</a>
         <a href="/active-trading" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">活跃主买</a>
-        <a href="/active-trading" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">活跃主买</a>
+        <a href="/abnormal-trades" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">异常成交</a>
       </div>
     </div>
     <div id="toolbar">
@@ -222,8 +222,7 @@
     <div id="rsi-chart" style="display: none;"></div>
 
     <script>
-      // 等待库加载完成
-      function initChart() {
+      // 等待库加载完�?      function initChart() {
         if (typeof LightweightCharts === 'undefined') {
           setTimeout(initChart, 100);
           return;
@@ -388,8 +387,7 @@
         },
       });
 
-      // 添加蜡烛图系列
-        const series = chart.addSeries(LightweightCharts.CandlestickSeries, {
+      // 添加蜡烛图系�?        const series = chart.addSeries(LightweightCharts.CandlestickSeries, {
           upColor: '#26a69a',
           downColor: '#ef5350',
           borderVisible: false,
@@ -397,9 +395,8 @@
           wickDownColor: '#ef5350',
         });
 
-        // 添加移动平均线系列
-        const ma5Series = chart.addSeries(LightweightCharts.LineSeries, {
-          color: '#E6E6FA', // 浅紫色 (Lavender)
+        // 添加移动平均线系�?        const ma5Series = chart.addSeries(LightweightCharts.LineSeries, {
+          color: '#E6E6FA', // 浅紫�?(Lavender)
           lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: false,
@@ -413,7 +410,7 @@
         });
 
         const ma20Series = chart.addSeries(LightweightCharts.LineSeries, {
-          color: '#FF00FF', // 紫红色 (Magenta)
+          color: '#FF00FF', // 紫红�?(Magenta)
           lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: false,
@@ -436,8 +433,7 @@
           visible: false, // Default hidden
         });
 
-        // 创建成交量图表
-        const volumeChart = LightweightCharts.createChart(document.getElementById('volume-chart'), {
+        // 创建成交量图�?        const volumeChart = LightweightCharts.createChart(document.getElementById('volume-chart'), {
           layout: { 
             background: { type: 'solid', color: '#1a1a1a' }, 
             textColor: '#ddd' 
@@ -460,8 +456,7 @@
           },
         });
 
-        // 添加成交量系列
-        const volumeSeries = volumeChart.addSeries(LightweightCharts.HistogramSeries, {
+        // 添加成交量系�?        const volumeSeries = volumeChart.addSeries(LightweightCharts.HistogramSeries, {
           color: '#26a69a',
           priceFormat: {
             type: 'volume',
@@ -583,7 +578,7 @@
           rsiToolTip.id = 'rsi-tooltip';
           document.getElementById('rsi-chart').appendChild(rsiToolTip);
   
-          // 创建主图表 Tooltip 元素 (MA显示)
+          // 创建主图�?Tooltip 元素 (MA显示)
           const mainToolTip = document.createElement('div');
           mainToolTip.style.position = 'absolute';
           mainToolTip.style.display = 'none';
@@ -601,8 +596,7 @@
           mainToolTip.style.left = '10px';
           document.getElementById('chart').appendChild(mainToolTip);
   
-          // 监听主图表十字光标移动
-          chart.subscribeCrosshairMove(param => {
+          // 监听主图表十字光标移�?          chart.subscribeCrosshairMove(param => {
              if (
                param.point === undefined ||
                !param.time ||
@@ -672,7 +666,7 @@
           const volumeStr = Math.round(data.value).toLocaleString();
 
           toolTip.style.display = 'block';
-          toolTip.innerHTML = `<div>时间: ${dateStr}</div><div style="margin-top: 4px; color: ${data.color}">成交量: ${volumeStr}</div>`;
+          toolTip.innerHTML = `<div>时间: ${dateStr}</div><div style="margin-top: 4px; color: ${data.color}">成交�? ${volumeStr}</div>`;
           
           // 智能定位
           const toolTipWidth = 120;
@@ -813,23 +807,21 @@
         }
         
         isPolling = true;
-        console.log('开始轮询，每5秒更新一次数据');
+        console.log('开始轮询，�?秒更新一次数�?);
         
-        // 更新按钮文本和状态
-        const loadBtn = document.getElementById('load');
+        // 更新按钮文本和状�?        const loadBtn = document.getElementById('load');
         loadBtn.textContent = '停止轮询';
         loadBtn.disabled = false;
         
         poller = setInterval(async () => {
           try {
-            // 仅重新加载最后 N 分钟也可，MVP全量即可
+            // 仅重新加载最�?N 分钟也可，MVP全量即可
             // 轮询更新时不重置视图缩放
             await loadData(false);
           } catch (error) {
             console.error('轮询更新失败:', error);
           }
-        }, 5000); // 每5秒轮询一次
-      }
+        }, 5000); // �?秒轮询一�?      }
 
       // 停止轮询函数
       function stopPolling() {
@@ -846,8 +838,7 @@
         loadBtn.disabled = false;
       }
 
-      // 状态显示函数
-      function showStatus(message, type = 'info') {
+      // 状态显示函�?      function showStatus(message, type = 'info') {
         const statusEl = document.getElementById('status');
         statusEl.textContent = message;
         statusEl.className = type;
@@ -860,13 +851,12 @@
         const loadBtn = document.getElementById('load');
         
         if (!symbol) {
-          showStatus('请输入股票代码', 'error');
+          showStatus('请输入股票代�?, 'error');
           return;
         }
 
         try {
-          // 只有在非轮询状态下才禁用按钮和显示加载状态
-          if (!isPolling) {
+          // 只有在非轮询状态下才禁用按钮和显示加载状�?          if (!isPolling) {
             loadBtn.disabled = true;
             showStatus('正在加载数据...', 'info');
           }
@@ -880,11 +870,11 @@
           const rows = await res.json();
           
           if (!Array.isArray(rows)) {
-            throw new Error('服务器返回的数据格式不正确');
+            throw new Error('服务器返回的数据格式不正�?);
           }
           
           if (rows.length === 0) {
-            showStatus(`没有找到 ${symbol} 在 ${date} 的数据`, 'error');
+            showStatus(`没有找到 ${symbol} �?${date} 的数据`, 'error');
             series.setData([]);
             return;
           }
@@ -893,8 +883,7 @@
           const candles = rows.map(r => {
             // Lightweight Charts 不原生支持时区，需要手动调整时间戳
             // 数据库中的时间是UTC时间，需要转换为本地时间显示
-            // 但是由于JavaScript的Date对象会自动处理时区，我们需要特殊处理
-            const utcDate = new Date(r.t);
+            // 但是由于JavaScript的Date对象会自动处理时区，我们需要特殊处�?            const utcDate = new Date(r.t);
             // 获取UTC时间戳（秒）
             const utcTimestamp = Math.floor(utcDate.getTime() / 1000);
             // 对于Lightweight Charts，我们直接使用UTC时间戳，让浏览器处理显示
@@ -919,11 +908,9 @@
             return;
           }
 
-          // 设置数据到图表
-          series.setData(candles);
+          // 设置数据到图�?          series.setData(candles);
           
-          // 设置移动平均线数据
-          const ma5Data = rows.map((r, i) => ({ time: candles[i].time, value: Number(r.ma5) })).filter(d => !isNaN(d.value) && d.value > 0);
+          // 设置移动平均线数�?          const ma5Data = rows.map((r, i) => ({ time: candles[i].time, value: Number(r.ma5) })).filter(d => !isNaN(d.value) && d.value > 0);
           const ma10Data = rows.map((r, i) => ({ time: candles[i].time, value: Number(r.ma10) })).filter(d => !isNaN(d.value) && d.value > 0);
           const ma20Data = rows.map((r, i) => ({ time: candles[i].time, value: Number(r.ma20) })).filter(d => !isNaN(d.value) && d.value > 0);
 
@@ -931,8 +918,7 @@
           ma10Series.setData(ma10Data);
           ma20Series.setData(ma20Data);
 
-          // 设置成交量数据
-          const volumeData = candles.map(c => ({
+          // 设置成交量数�?          const volumeData = candles.map(c => ({
             time: c.time,
             value: c.volume,
             color: c.close >= c.open ? '#26a69a' : '#ef5350'
@@ -976,14 +962,13 @@
           // 自动调整视图
           if (shouldFitContent) {
             chart.timeScale().fitContent();
-            // volumeChart 会通过 syncHandler 自动同步，不需要单独 fitContent
-            // 但为了保险，可以在短暂延迟后 fit 一次，或者依赖 sync
+            // volumeChart 会通过 syncHandler 自动同步，不需要单�?fitContent
+            // 但为了保险，可以在短暂延迟后 fit 一次，或者依�?sync
           }
           
           showStatus(`成功加载 ${candles.length} 条K线数据`, 'success');
           
-          // 如果不是轮询状态，则在首次加载成功后启动轮询
-          if (!isPolling) {
+          // 如果不是轮询状态，则在首次加载成功后启动轮�?          if (!isPolling) {
             startPolling();
           }
           
@@ -991,14 +976,13 @@
           console.error('加载数据失败:', error);
           showStatus(`加载失败: ${error.message}`, 'error');
         } finally {
-          // 只有在非轮询状态下才重新启用按钮
-          if (!isPolling) {
+          // 只有在非轮询状态下才重新启用按�?          if (!isPolling) {
             loadBtn.disabled = false;
           }
         }
       }
 
-      // 修改加载按钮事件：支持停止/启动轮询
+      // 修改加载按钮事件：支持停�?启动轮询
       function handleLoadClick() {
         if (isPolling) {
           // 如果正在轮询，则停止轮询
@@ -1006,8 +990,7 @@
           document.getElementById('load').textContent = '加载数据';
           document.getElementById('load').disabled = false;
         } else {
-          // 如果没有轮询，则加载数据并启动轮询
-          loadData();
+          // 如果没有轮询，则加载数据并启动轮�?          loadData();
         }
       }
 
@@ -1086,19 +1069,16 @@
       document.getElementById('toggle-macd').addEventListener('change', updateChartLayout);
       document.getElementById('toggle-rsi').addEventListener('change', updateChartLayout);
 
-      // 回车键加载
-      document.getElementById('symbol').addEventListener('keypress', (e) => {
+      // 回车键加�?      document.getElementById('symbol').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') loadData();
       });
       document.getElementById('date').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') loadData();
       });
 
-      // 设置默认日期为今天
-      document.getElementById('date').valueAsDate = new Date();
+      // 设置默认日期为今�?      document.getElementById('date').valueAsDate = new Date();
 
-      // 页面加载完成后自动加载默认数据
-      window.addEventListener('load', () => {
+      // 页面加载完成后自动加载默认数�?      window.addEventListener('load', () => {
         // Initial layout update
         updateChartLayout();
         setTimeout(loadData, 500);
@@ -1115,8 +1095,8 @@
       
       } // 结束 initChart 函数
       
-      // 启动图表初始化
-      initChart();
+      // 启动图表初始�?      initChart();
     </script>
   </body>
 </html>
+

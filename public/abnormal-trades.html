@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>异常成交</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #1a1a1a;
+      color: #ddd;
+      padding: 20px;
+      line-height: 1.6;
+    }
+
+    .container { max-width: 1600px; margin: 0 auto; }
+
+    .nav-links { text-align: center; margin-bottom: 20px; }
+    .nav-links a {
+      color: #007acc;
+      text-decoration: none;
+      padding: 6px 14px;
+      margin: 0 6px;
+      border: 1px solid #007acc;
+      border-radius: 4px;
+      transition: all 0.2s;
+      display: inline-block;
+      font-size: 13px;
+    }
+    .nav-links a:hover { background-color: #007acc; color: white; }
+    .nav-links a.active { background-color: #007acc; color: white; }
+
+    .header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid #333;
+      padding-bottom: 12px;
+    }
+    .title-wrap { display: flex; flex-direction: column; gap: 4px; }
+    .title { font-size: 1.4em; color: #ddd; font-weight: normal; }
+    .subtitle { font-size: 12px; color: #888; }
+    .header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .refresh-info { font-size: 12px; color: #888; white-space: nowrap; }
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #555;
+      margin-right: 6px;
+      vertical-align: middle;
+      transition: background 0.3s;
+    }
+    .status-dot.live { background: #26a69a; box-shadow: 0 0 5px #26a69a; }
+    .status-dot.error { background: #ef5350; box-shadow: 0 0 5px #ef5350; }
+    .status-dot.loading { background: #f0a020; box-shadow: 0 0 5px #f0a020; }
+
+    .btn {
+      padding: 6px 16px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      background: #1a1a1a;
+      color: #ccc;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .btn:hover { border-color: #888; color: #fff; }
+    .btn.primary { border-color: #007acc; color: #7ac0f0; background: #007acc18; }
+    .btn.primary:hover { background: #007acc30; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .mode-switch {
+      display: inline-flex;
+      gap: 6px;
+      background: #222;
+      padding: 4px;
+      border-radius: 6px;
+      border: 1px solid #333;
+    }
+    .mode-btn {
+      border: 1px solid transparent;
+      background: transparent;
+      color: #aaa;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .mode-btn:hover { color: #fff; }
+    .mode-btn.active {
+      background: #007acc18;
+      border-color: #007acc55;
+      color: #7ac0f0;
+    }
+
+    .filter-panel-wrap { margin-bottom: 14px; }
+    .filter-toggle-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 14px;
+      background: #2a2a2a;
+      border-radius: 6px;
+      cursor: pointer;
+      user-select: none;
+      border: 1px solid #333;
+      transition: border-color 0.15s;
+    }
+    .filter-toggle-bar:hover { border-color: #444; }
+    .filter-toggle-left { display: flex; align-items: center; gap: 10px; }
+    .filter-toggle-label { font-size: 12px; color: #666; }
+    .filter-active-pills { display: flex; gap: 5px; flex-wrap: wrap; }
+    .filter-pill {
+      font-size: 11px;
+      padding: 1px 8px;
+      border-radius: 10px;
+      background: #007acc1a;
+      border: 1px solid #007acc44;
+      color: #7ac0f0;
+    }
+    .filter-chevron { font-size: 10px; color: #555; transition: transform 0.2s ease; }
+    .filter-chevron.open { transform: rotate(180deg); }
+    .filter-body {
+      overflow: hidden;
+      max-height: 0;
+      opacity: 0;
+      transition: max-height 0.25s ease, opacity 0.2s ease;
+    }
+    .filter-body.open { max-height: 420px; opacity: 1; }
+    .filter-panel {
+      background: #2a2a2a;
+      padding: 12px 16px 14px;
+      border-radius: 0 0 6px 6px;
+      border-top: 1px solid #333;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 20px;
+      align-items: flex-end;
+    }
+    .filter-group { display: flex; flex-direction: column; gap: 4px; min-width: 130px; }
+    .filter-group.wide { min-width: 220px; }
+    .filter-group label { font-size: 12px; color: #888; }
+    .filter-row { display: flex; align-items: center; gap: 5px; }
+    .filter-sep { font-size: 12px; color: #555; }
+
+    input[type=number], input[type=text], select {
+      background: #1a1a1a;
+      border: 1px solid #444;
+      color: #ddd;
+      padding: 6px 8px;
+      border-radius: 4px;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type=number] { width: 90px; -moz-appearance: textfield; }
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+    input[type=text], select { min-width: 110px; }
+    input[type=text].wide { width: 220px; }
+    input:focus, select:focus { border-color: #007acc; }
+    input::placeholder { color: #555; }
+
+    .filter-actions { display: flex; align-items: flex-end; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+    .preset-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip-btn {
+      padding: 5px 10px;
+      border-radius: 14px;
+      border: 1px solid #444;
+      background: #1f1f1f;
+      color: #aaa;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .chip-btn:hover { color: #fff; border-color: #007acc; }
+
+    .status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 10px;
+      padding: 0 2px;
+      flex-wrap: wrap;
+    }
+    .rule-summary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .rule-tag {
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 11px;
+      border: 1px solid #26a69a44;
+      color: #26a69a;
+      background: #26a69a0a;
+    }
+    .rule-tag.warn {
+      border-color: #f0a02055;
+      color: #f0c060;
+      background: #f0a02012;
+    }
+    .rule-tag.neutral {
+      border-color: #66666655;
+      color: #aaa;
+      background: #66666612;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background-color: #252525;
+      border-radius: 8px;
+      overflow: hidden;
+      font-size: 13px;
+    }
+    th, td { padding: 9px 12px; text-align: right; border-bottom: 1px solid #2e2e2e; }
+    th {
+      background-color: #333;
+      color: #bbb;
+      font-weight: 600;
+      font-size: 12px;
+      user-select: none;
+      white-space: nowrap;
+    }
+    th:first-child, td:first-child { text-align: left; padding-left: 14px; }
+    tr:hover td { background-color: #2a2a2a; }
+    .table-wrap { overflow-x: auto; border-radius: 8px; }
+
+    .symbol { font-weight: bold; color: #fff; font-size: 14px; }
+    .good { color: #26a69a; }
+    .bad { color: #ef5350; }
+    .warn { color: #f0c060; }
+    .muted { color: #777; }
+
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      font-weight: 600;
+    }
+    .badge.buy { color: #26a69a; background: #26a69a18; border-color: #26a69a44; }
+    .badge.sell { color: #ef5350; background: #ef535018; border-color: #ef535044; }
+    .badge.intra { color: #7ac0f0; background: #007acc18; border-color: #007acc44; }
+    .badge.slip-up { color: #f0c060; background: #f0a02018; border-color: #f0a02044; }
+    .badge.slip-down { color: #ff9a8f; background: #ef535018; border-color: #ef535044; }
+
+    .empty-row td,
+    .empty {
+      text-align: center;
+      padding: 42px 24px;
+      color: #555;
+    }
+    .empty strong {
+      display: block;
+      color: #ddd;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    .footer-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 10px;
+      color: #888;
+      font-size: 12px;
+      padding: 0 2px;
+    }
+    .pager { display: flex; gap: 8px; align-items: center; }
+
+    @media (max-width: 768px) {
+      body { padding: 14px; }
+      .header-bar { flex-direction: column; align-items: flex-start; }
+      .header-right { width: 100%; }
+      .filter-panel { gap: 10px 12px; }
+      .filter-group, .filter-group.wide { min-width: calc(50% - 6px); }
+      .filter-actions { margin-left: 0; width: 100%; justify-content: space-between; }
+      .mode-switch { width: 100%; flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="nav-links">
+      <a href="/">首页</a>
+      <a href="/alerts">价格提醒</a>
+      <a href="/volume-alerts">放量提醒</a>
+      <a href="/ranking">涨跌排名</a>
+      <a href="/boundary-alerts">边界预警</a>
+      <a href="/active-trading">活跃主买</a>
+      <a href="/abnormal-trades" class="active">异常成交</a>
+    </div>
+
+    <div class="header-bar">
+      <div class="title-wrap">
+        <h1 class="title" id="pageTitle">异常成交监控</h1>
+        <div class="subtitle">参考活跃主买页面风格，保留价差内成交与滑档成交双模式查询能力</div>
+      </div>
+
+      <div class="header-right">
+        <div class="mode-switch" role="tablist" aria-label="异常成交模式">
+          <button class="mode-btn active" type="button" data-mode="intra">价差内成交</button>
+          <button class="mode-btn" type="button" data-mode="slip">滑档成交</button>
+        </div>
+        <button class="btn" id="autoRefreshBtn" type="button">自动刷新：开</button>
+        <button class="btn" id="copyLinkBtn" type="button">复制链接</button>
+        <button class="btn primary" id="refreshBtn" type="button">立即刷新</button>
+        <div class="refresh-info" id="refreshInfo"><span class="status-dot" id="statusDot"></span>等待请求</div>
+      </div>
+    </div>
+
+    <div class="filter-panel-wrap">
+      <div class="filter-toggle-bar" id="filterToggleBar">
+        <div class="filter-toggle-left">
+          <strong>筛选条件</strong>
+          <span class="filter-toggle-label">当前筛选</span>
+          <div class="filter-active-pills" id="filterPills"></div>
+        </div>
+        <span class="filter-chevron open" id="filterChevron">▼</span>
+      </div>
+
+      <div class="filter-body open" id="filterBody">
+        <div class="filter-panel">
+          <div class="filter-group">
+            <label for="symbol">股票代码</label>
+            <input id="symbol" type="text" placeholder="如 AAPL">
+          </div>
+
+          <div class="filter-group" id="directionField" style="display:none;">
+            <label for="direction">滑档方向</label>
+            <select id="direction">
+              <option value="">全部</option>
+              <option value="above_ask">above_ask</option>
+              <option value="below_bid">below_bid</option>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label for="tick">Tick</label>
+            <select id="tick">
+              <option value="">全部</option>
+              <option value="U">U</option>
+              <option value="D">D</option>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label for="minSize">最小成交量</label>
+            <input id="minSize" type="number" min="0" step="1" placeholder="1000">
+          </div>
+
+          <div class="filter-group">
+            <label for="minPrice">成交价区间</label>
+            <div class="filter-row">
+              <input id="minPrice" type="number" min="0" step="0.0001" placeholder="最低">
+              <span class="filter-sep">~</span>
+              <input id="maxPrice" type="number" min="0" step="0.0001" placeholder="最高">
+            </div>
+          </div>
+
+          <div class="filter-group">
+            <label for="minBps">最小 bps</label>
+            <input id="minBps" type="number" min="0" step="0.01" placeholder="5">
+          </div>
+
+          <div class="filter-group">
+            <label for="limit">每页条数</label>
+            <select id="limit">
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="200" selected>200</option>
+              <option value="300">300</option>
+              <option value="500">500</option>
+            </select>
+          </div>
+
+          <div class="filter-actions">
+            <div class="preset-row">
+              <button class="chip-btn" type="button" data-preset="bigsize">大单</button>
+              <button class="chip-btn" type="button" data-preset="strongbps">高 bps</button>
+            </div>
+            <button class="btn" id="resetBtn" type="button">重置</button>
+            <button class="btn primary" id="applyBtn" type="button">应用筛选</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="status-bar">
+      <div class="rule-summary">
+        <span class="rule-tag" id="tableModePill">当前模式：价差内成交</span>
+        <span class="rule-tag warn" id="tableStatusPill">等待请求</span>
+        <span class="rule-tag neutral" id="tableRangePill">页范围：-</span>
+        <span class="rule-tag neutral" id="tableHint">按 trade_ts DESC 展示</span>
+      </div>
+      <div class="refresh-info" id="pageInfo">第 1 页</div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody">
+          <tr class="empty-row">
+            <td colspan="20" class="empty">
+              <strong>准备就绪</strong>
+              点击“立即刷新”或“应用筛选”开始加载数据。
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="footer-bar">
+      <div class="refresh-info">表格按后端默认顺序展示：trade_ts DESC, id DESC</div>
+      <div class="pager">
+        <button class="btn" id="prevBtn" type="button">上一页</button>
+        <button class="btn" id="nextBtn" type="button">下一页</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const state = {
+      mode: 'intra',
+      limit: 200,
+      offset: 0,
+      total: 0,
+      rows: [],
+      autoRefresh: true,
+      timerId: null,
+      lastUpdatedAt: null,
+      loading: false,
+      filtersOpen: true
+    };
+
+    const columnsByMode = {
+      intra: [
+        { key: 'symbol', label: 'Symbol', render: row => `<span class="symbol">${safe(row.symbol)}</span>` },
+        { key: 'price', label: 'Price', format: value => formatNum(value, 4) },
+        { key: 'size', label: 'Size', format: formatInt },
+        { key: 'bid', label: 'Bid', format: value => formatNum(value, 4) },
+        { key: 'ask', label: 'Ask', format: value => formatNum(value, 4) },
+        { key: 'spread_abs', label: 'Spread Abs', className: 'warn', format: value => formatNum(value, 4) },
+        { key: 'spread_bps', label: 'Spread Bps', className: 'warn', format: formatBps },
+        { key: 'tick', label: 'Tick', render: row => safe(row.tick || '-') },
+        { key: 'trade_ts', label: 'Trade Time', render: row => formatTime(row.trade_ts) }
+      ],
+      slip: [
+        { key: 'symbol', label: 'Symbol', render: row => `<span class="symbol">${safe(row.symbol)}</span>` },
+        { key: 'direction', label: 'Direction', render: row => directionBadge(row.direction) },
+        { key: 'price', label: 'Price', format: value => formatNum(value, 4) },
+        { key: 'size', label: 'Size', format: formatInt },
+        { key: 'bid', label: 'Bid', format: value => formatNum(value, 4) },
+        { key: 'ask', label: 'Ask', format: value => formatNum(value, 4) },
+        { key: 'slip_abs', label: 'Slip Abs', className: 'warn', format: value => formatNum(value, 4) },
+        { key: 'slip_bps', label: 'Slip Bps', className: 'warn', format: formatBps },
+        { key: 'tick', label: 'Tick', render: row => safe(row.tick || '-') },
+        { key: 'trade_ts', label: 'Trade Time', render: row => formatTime(row.trade_ts) }
+      ]
+    };
+
+    const els = {
+      pageTitle: document.getElementById('pageTitle'),
+      tableHead: document.getElementById('tableHead'),
+      tableBody: document.getElementById('tableBody'),
+      tableModePill: document.getElementById('tableModePill'),
+      tableStatusPill: document.getElementById('tableStatusPill'),
+      tableRangePill: document.getElementById('tableRangePill'),
+      pageInfo: document.getElementById('pageInfo'),
+      tableHint: document.getElementById('tableHint'),
+      directionField: document.getElementById('directionField'),
+      autoRefreshBtn: document.getElementById('autoRefreshBtn'),
+      filterBody: document.getElementById('filterBody'),
+      filterChevron: document.getElementById('filterChevron'),
+      filterPills: document.getElementById('filterPills'),
+      refreshInfo: document.getElementById('refreshInfo'),
+      statusDot: document.getElementById('statusDot')
+    };
+
+    function safe(value) {
+      return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }[ch]));
+    }
+
+    function formatNum(value, digits = 4) {
+      if (value == null || value === '') return '-';
+      const num = Number(value);
+      return Number.isFinite(num) ? num.toFixed(digits) : safe(value);
+    }
+
+    function formatBps(value) {
+      if (value == null || value === '') return '-';
+      const num = Number(value);
+      return Number.isFinite(num) ? `${num.toFixed(2)} bps` : safe(value);
+    }
+
+    function formatInt(value) {
+      if (value == null || value === '') return '-';
+      const num = Number(value);
+      return Number.isFinite(num) ? num.toLocaleString('en-US') : safe(value);
+    }
+
+    function formatTime(value) {
+      if (!value) return '-';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return safe(value);
+      return date.toLocaleString('zh-CN', {
+        hour12: false,
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+    }
+
+    function directionBadge(direction) {
+      if (direction === 'above_ask') return '<span class="badge slip-up">ABOVE ASK</span>';
+      if (direction === 'below_bid') return '<span class="badge slip-down">BELOW BID</span>';
+      return '<span class="badge intra">-</span>';
+    }
+
+    function currentColumns() {
+      return columnsByMode[state.mode];
+    }
+
+    function getModeLabel() {
+      return state.mode === 'intra' ? '价差内成交' : '滑档成交';
+    }
+
+    function magnitudeKey() {
+      return state.mode === 'intra' ? 'spread_bps' : 'slip_bps';
+    }
+
+    function readFilters() {
+      return {
+        symbol: document.getElementById('symbol').value.trim().toUpperCase(),
+        direction: document.getElementById('direction').value,
+        tick: document.getElementById('tick').value,
+        min_size: document.getElementById('minSize').value.trim(),
+        min_price: document.getElementById('minPrice').value.trim(),
+        max_price: document.getElementById('maxPrice').value.trim(),
+        min_bps: document.getElementById('minBps').value.trim(),
+        limit: document.getElementById('limit').value
+      };
+    }
+
+    function writeFilters(filters) {
+      document.getElementById('symbol').value = filters.symbol || '';
+      document.getElementById('direction').value = filters.direction || '';
+      document.getElementById('tick').value = filters.tick || '';
+      document.getElementById('minSize').value = filters.min_size || '';
+      document.getElementById('minPrice').value = filters.min_price || '';
+      document.getElementById('maxPrice').value = filters.max_price || '';
+      document.getElementById('minBps').value = filters.min_bps || '';
+      document.getElementById('limit').value = filters.limit || '200';
+    }
+
+    function syncUrl() {
+      const url = new URL(window.location.href);
+      const filters = readFilters();
+      url.searchParams.set('mode', state.mode);
+      url.searchParams.set('offset', String(state.offset));
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value) url.searchParams.set(key, value);
+        else url.searchParams.delete(key);
+      });
+      window.history.replaceState({}, '', url);
+    }
+
+    function loadFromUrl() {
+      const url = new URL(window.location.href);
+      const mode = url.searchParams.get('mode');
+      if (mode === 'slip' || mode === 'intra') state.mode = mode;
+      state.offset = Number(url.searchParams.get('offset') || 0) || 0;
+      writeFilters({
+        symbol: url.searchParams.get('symbol') || '',
+        direction: url.searchParams.get('direction') || '',
+        tick: url.searchParams.get('tick') || '',
+        min_size: url.searchParams.get('min_size') || '',
+        min_price: url.searchParams.get('min_price') || '',
+        max_price: url.searchParams.get('max_price') || '',
+        min_bps: url.searchParams.get('min_bps') || '',
+        limit: url.searchParams.get('limit') || '200'
+      });
+    }
+
+    function renderFilterPills() {
+      const labels = [];
+      const filters = readFilters();
+      if (filters.symbol) labels.push(`代码 ${filters.symbol}`);
+      if (state.mode === 'slip' && filters.direction) labels.push(filters.direction);
+      if (filters.tick) labels.push(`Tick ${filters.tick}`);
+      if (filters.min_size) labels.push(`量 >= ${filters.min_size}`);
+      if (filters.min_price || filters.max_price) labels.push(`价格 ${filters.min_price || '-'} ~ ${filters.max_price || '-'}`);
+      if (filters.min_bps) labels.push(`bps >= ${filters.min_bps}`);
+      if (filters.limit) labels.push(`每页 ${filters.limit}`);
+      els.filterPills.innerHTML = labels.length ? labels.map(label => `<span class="filter-pill">${safe(label)}</span>`).join('') : '<span class="filter-pill">未设置</span>';
+    }
+
+    function toggleFilters(forceOpen) {
+      state.filtersOpen = typeof forceOpen === 'boolean' ? forceOpen : !state.filtersOpen;
+      els.filterBody.classList.toggle('open', state.filtersOpen);
+      els.filterChevron.classList.toggle('open', state.filtersOpen);
+    }
+
+    function renderMode() {
+      document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === state.mode);
+      });
+      els.directionField.style.display = state.mode === 'slip' ? 'flex' : 'none';
+      els.pageTitle.textContent = `异常成交监控 - ${getModeLabel()}`;
+      els.tableModePill.textContent = `当前模式：${getModeLabel()}`;
+      els.tableHint.textContent = state.mode === 'intra'
+        ? '价差内成交：bid < price < ask'
+        : '滑档成交：price < bid 或 price > ask';
+      renderFilterPills();
+    }
+
+    function renderTable() {
+      const cols = currentColumns();
+      els.tableHead.innerHTML = `<tr>${cols.map(col => `<th>${col.label}</th>`).join('')}</tr>`;
+
+      if (!state.rows.length) {
+        els.tableBody.innerHTML = '<tr class="empty-row"><td colspan="20" class="empty"><strong>没有匹配记录</strong>可以放宽时间区间、降低最小 bps，或切换到另一种异常成交模式。</td></tr>';
+        return;
+      }
+
+      els.tableBody.innerHTML = state.rows.map(row => {
+        const cells = cols.map(col => {
+          const raw = row[col.key];
+          let html = '-';
+          if (col.render) html = col.render(row);
+          else if (col.format) html = col.format(raw);
+          else html = safe(raw ?? '-');
+          return `<td class="${col.className || ''}">${html}</td>`;
+        }).join('');
+        return `<tr>${cells}</tr>`;
+      }).join('');
+    }
+
+    function renderPageInfo() {
+      const total = state.total || 0;
+      const rows = state.rows;
+      const start = total === 0 ? 0 : state.offset + 1;
+      const end = Math.min(state.offset + rows.length, total);
+      els.tableRangePill.textContent = total === 0 ? '页范围：0' : `页范围：${start} - ${end}`;
+      els.pageInfo.textContent = total === 0
+        ? '第 1 页'
+        : `第 ${Math.floor(state.offset / state.limit) + 1} 页，共 ${Math.max(1, Math.ceil(total / state.limit))} 页`;
+    }
+
+    function setLoading(loading, message) {
+      state.loading = loading;
+      els.tableStatusPill.textContent = loading ? (message || '加载中...') : (message || '已同步');
+      els.refreshInfo.innerHTML = `<span class="status-dot ${loading ? 'loading' : (String(message || '').includes('失败') ? 'error' : 'live')}" id="statusDot"></span>${safe(loading ? (message || '加载中...') : (message || '已同步'))}`;
+      document.getElementById('refreshBtn').disabled = loading;
+      document.getElementById('applyBtn').disabled = loading;
+      document.getElementById('prevBtn').disabled = loading || state.offset === 0;
+      document.getElementById('nextBtn').disabled = loading || (state.offset + state.limit >= state.total);
+    }
+
+    function buildApiUrl() {
+      const filters = readFilters();
+      state.limit = Number(filters.limit || 200) || 200;
+      const url = new URL(state.mode === 'intra' ? '/api/intra-spread-trades' : '/api/slip-trades', window.location.origin);
+      Object.entries(filters).forEach(([key, value]) => {
+        if (!value) return;
+        if (state.mode !== 'slip' && key === 'direction') return;
+        url.searchParams.set(key, value);
+      });
+      url.searchParams.set('offset', String(state.offset));
+      return url;
+    }
+
+    async function fetchRows() {
+      syncUrl();
+      renderFilterPills();
+      const url = buildApiUrl();
+      setLoading(true, '加载中...');
+
+      try {
+        const response = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        state.rows = Array.isArray(payload.rows) ? payload.rows : [];
+        state.total = Number(payload.total || 0);
+        state.limit = Number(payload.limit || state.limit);
+        state.lastUpdatedAt = new Date();
+
+        renderMode();
+        renderTable();
+        renderPageInfo();
+        setLoading(false, `已同步 ${state.rows.length} 条`);
+      } catch (error) {
+        state.rows = [];
+        state.total = 0;
+        renderMode();
+        renderTable();
+        renderPageInfo();
+        setLoading(false, `请求失败：${error.message}`);
+        els.tableBody.innerHTML = `<tr class="empty-row"><td colspan="20" class="empty"><strong>加载失败</strong>请确认后端已提供 ${state.mode === 'intra' ? '/api/intra-spread-trades' : '/api/slip-trades'}。</td></tr>`;
+      }
+    }
+
+    function applyFilters() {
+      state.offset = 0;
+      fetchRows();
+    }
+
+    function resetFilters() {
+      writeFilters({ limit: '200' });
+      state.offset = 0;
+      renderFilterPills();
+      fetchRows();
+    }
+
+    function changeMode(nextMode) {
+      if (state.mode === nextMode) return;
+      state.mode = nextMode;
+      state.offset = 0;
+      renderMode();
+      fetchRows();
+    }
+
+    function applyPreset(name) {
+      if (name === 'bigsize') document.getElementById('minSize').value = '1000';
+      if (name === 'strongbps') document.getElementById('minBps').value = '5';
+      applyFilters();
+    }
+
+    function toggleAutoRefresh() {
+      state.autoRefresh = !state.autoRefresh;
+      els.autoRefreshBtn.textContent = `自动刷新：${state.autoRefresh ? '开' : '关'}`;
+      clearInterval(state.timerId);
+      if (state.autoRefresh) {
+        state.timerId = setInterval(fetchRows, 5000);
+      }
+    }
+
+    async function copyLink() {
+      syncUrl();
+      try {
+        await navigator.clipboard.writeText(window.location.href);
+        els.tableStatusPill.textContent = '链接已复制';
+      } catch (error) {
+        els.tableStatusPill.textContent = '复制失败，请手动复制地址栏';
+      }
+    }
+
+    function bindEvents() {
+      document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => changeMode(btn.dataset.mode));
+      });
+      document.getElementById('refreshBtn').addEventListener('click', fetchRows);
+      document.getElementById('applyBtn').addEventListener('click', applyFilters);
+      document.getElementById('resetBtn').addEventListener('click', resetFilters);
+      document.getElementById('prevBtn').addEventListener('click', () => {
+        state.offset = Math.max(0, state.offset - state.limit);
+        fetchRows();
+      });
+      document.getElementById('nextBtn').addEventListener('click', () => {
+        if (state.offset + state.limit >= state.total) return;
+        state.offset += state.limit;
+        fetchRows();
+      });
+      document.getElementById('autoRefreshBtn').addEventListener('click', toggleAutoRefresh);
+      document.getElementById('copyLinkBtn').addEventListener('click', copyLink);
+      document.querySelectorAll('[data-preset]').forEach(btn => {
+        btn.addEventListener('click', () => applyPreset(btn.dataset.preset));
+      });
+      document.getElementById('filterToggleBar').addEventListener('click', () => toggleFilters());
+      ['symbol', 'minSize', 'minPrice', 'maxPrice', 'minBps', 'direction', 'tick', 'limit'].forEach(id => {
+        document.getElementById(id).addEventListener('input', renderFilterPills);
+        document.getElementById(id).addEventListener('change', renderFilterPills);
+      });
+    }
+
+    loadFromUrl();
+    bindEvents();
+    renderMode();
+    renderPageInfo();
+    renderFilterPills();
+    toggleFilters(true);
+    fetchRows();
+    state.timerId = setInterval(() => {
+      if (state.autoRefresh) fetchRows();
+    }, 5000);
+  </script>
+</body>
+</html>
