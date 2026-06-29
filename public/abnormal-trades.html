@@ -358,8 +358,21 @@
           </div>
 
           <div class="filter-group">
-            <label for="minSize">最小成交量</label>
-            <input id="minSize" type="number" min="0" step="1" placeholder="1000">
+            <label for="minSize">成交量区间</label>
+            <div class="filter-row">
+              <input id="minSize" type="number" min="0" step="1" placeholder="最小">
+              <span class="filter-sep">~</span>
+              <input id="maxSize" type="number" min="0" step="1" placeholder="最大">
+            </div>
+          </div>
+
+          <div class="filter-group">
+            <label for="minAbs">绝对值幅度</label>
+            <div class="filter-row">
+              <input id="minAbs" type="number" min="0" step="0.0001" placeholder="最小">
+              <span class="filter-sep">~</span>
+              <input id="maxAbs" type="number" min="0" step="0.0001" placeholder="最大">
+            </div>
           </div>
 
           <div class="filter-group">
@@ -556,6 +569,9 @@
         direction: document.getElementById('direction').value,
         tick: document.getElementById('tick').value,
         min_size: document.getElementById('minSize').value.trim(),
+        max_size: document.getElementById('maxSize').value.trim(),
+        min_abs: document.getElementById('minAbs').value.trim(),
+        max_abs: document.getElementById('maxAbs').value.trim(),
         min_price: document.getElementById('minPrice').value.trim(),
         max_price: document.getElementById('maxPrice').value.trim(),
         min_bps: document.getElementById('minBps').value.trim(),
@@ -568,6 +584,9 @@
       document.getElementById('direction').value = filters.direction || '';
       document.getElementById('tick').value = filters.tick || '';
       document.getElementById('minSize').value = filters.min_size || '';
+      document.getElementById('maxSize').value = filters.max_size || '';
+      document.getElementById('minAbs').value = filters.min_abs || '';
+      document.getElementById('maxAbs').value = filters.max_abs || '';
       document.getElementById('minPrice').value = filters.min_price || '';
       document.getElementById('maxPrice').value = filters.max_price || '';
       document.getElementById('minBps').value = filters.min_bps || '';
@@ -596,6 +615,9 @@
         direction: url.searchParams.get('direction') || '',
         tick: url.searchParams.get('tick') || '',
         min_size: url.searchParams.get('min_size') || '',
+        max_size: url.searchParams.get('max_size') || '',
+        min_abs: url.searchParams.get('min_abs') || '',
+        max_abs: url.searchParams.get('max_abs') || '',
         min_price: url.searchParams.get('min_price') || '',
         max_price: url.searchParams.get('max_price') || '',
         min_bps: url.searchParams.get('min_bps') || '',
@@ -609,7 +631,8 @@
       if (filters.symbol) labels.push(`代码 ${filters.symbol}`);
       if (state.mode === 'slip' && filters.direction) labels.push(filters.direction);
       if (filters.tick) labels.push(`Tick ${filters.tick}`);
-      if (filters.min_size) labels.push(`量 >= ${filters.min_size}`);
+      if (filters.min_size || filters.max_size) labels.push(`量 ${filters.min_size || '-'} ~ ${filters.max_size || '-'}`);
+      if (filters.min_abs || filters.max_abs) labels.push(`abs ${filters.min_abs || '-'} ~ ${filters.max_abs || '-'}`);
       if (filters.min_price || filters.max_price) labels.push(`价格 ${filters.min_price || '-'} ~ ${filters.max_price || '-'}`);
       if (filters.min_bps) labels.push(`bps >= ${filters.min_bps}`);
       if (filters.limit) labels.push(`每页 ${filters.limit}`);
@@ -640,7 +663,7 @@
       els.tableHead.innerHTML = `<tr>${cols.map(col => `<th>${col.label}</th>`).join('')}</tr>`;
 
       if (!state.rows.length) {
-        els.tableBody.innerHTML = '<tr class="empty-row"><td colspan="20" class="empty"><strong>没有匹配记录</strong>可以放宽时间区间、降低最小 bps，或切换到另一种异常成交模式。</td></tr>';
+        els.tableBody.innerHTML = '<tr class="empty-row"><td colspan="20" class="empty"><strong>没有匹配记录</strong>可以放宽价格、abs、bps 或成交量区间，或切换到另一种异常成交模式。</td></tr>';
         return;
       }
 
@@ -742,7 +765,10 @@
     }
 
     function applyPreset(name) {
-      if (name === 'bigsize') document.getElementById('minSize').value = '1000';
+      if (name === 'bigsize') {
+        document.getElementById('minSize').value = '1000';
+        document.getElementById('maxSize').value = '';
+      }
       if (name === 'strongbps') document.getElementById('minBps').value = '5';
       applyFilters();
     }
@@ -788,7 +814,7 @@
         btn.addEventListener('click', () => applyPreset(btn.dataset.preset));
       });
       document.getElementById('filterToggleBar').addEventListener('click', () => toggleFilters());
-      ['symbol', 'minSize', 'minPrice', 'maxPrice', 'minBps', 'direction', 'tick', 'limit'].forEach(id => {
+      ['symbol', 'minSize', 'maxSize', 'minAbs', 'maxAbs', 'minPrice', 'maxPrice', 'minBps', 'direction', 'tick', 'limit'].forEach(id => {
         document.getElementById(id).addEventListener('input', renderFilterPills);
         document.getElementById(id).addEventListener('change', renderFilterPills);
       });

@@ -2031,6 +2031,7 @@ async function queryTradeAnomalyTable(req, res, options) {
   const {
     tableName,
     magnitudeColumn,
+    absColumn,
     selectColumns,
     extraFilters = [],
   } = options;
@@ -2047,7 +2048,10 @@ async function queryTradeAnomalyTable(req, res, options) {
     const offset = clampTradeQueryInt(req.query.offset, 0, 50000);
     const minPrice = req.query.min_price == null ? null : Number(req.query.min_price);
     const maxPrice = req.query.max_price == null ? null : Number(req.query.max_price);
+    const minAbs = req.query.min_abs == null ? null : Number(req.query.min_abs);
+    const maxAbs = req.query.max_abs == null ? null : Number(req.query.max_abs);
     const minSize = req.query.min_size == null ? null : Number(req.query.min_size);
+    const maxSize = req.query.max_size == null ? null : Number(req.query.max_size);
     const minMagnitude = req.query.min_bps == null ? null : Number(req.query.min_bps);
 
     const where = [];
@@ -2089,9 +2093,21 @@ async function queryTradeAnomalyTable(req, res, options) {
       params.push(maxPrice);
       where.push(`price <= $${params.length}`);
     }
+    if (Number.isFinite(minAbs)) {
+      params.push(minAbs);
+      where.push(`${absColumn} >= $${params.length}`);
+    }
+    if (Number.isFinite(maxAbs)) {
+      params.push(maxAbs);
+      where.push(`${absColumn} <= $${params.length}`);
+    }
     if (Number.isFinite(minSize) && minSize > 0) {
       params.push(minSize);
       where.push(`size >= $${params.length}`);
+    }
+    if (Number.isFinite(maxSize) && maxSize > 0) {
+      params.push(maxSize);
+      where.push(`size <= $${params.length}`);
     }
     if (Number.isFinite(minMagnitude) && minMagnitude >= 0) {
       params.push(minMagnitude);
@@ -2148,6 +2164,7 @@ app.get('/api/intra-spread-trades', async (req, res) => {
   return queryTradeAnomalyTable(req, res, {
     tableName: 'intra_spread_trades',
     magnitudeColumn: 'spread_bps',
+    absColumn: 'spread_abs',
     selectColumns: `
       id, symbol, tos_entry_id, price, size, bid, ask,
       spread_abs, spread_bps,
@@ -2161,6 +2178,7 @@ app.get('/api/slip-trades', async (req, res) => {
   return queryTradeAnomalyTable(req, res, {
     tableName: 'slip_trades',
     magnitudeColumn: 'slip_bps',
+    absColumn: 'slip_abs',
     selectColumns: `
       id, symbol, tos_entry_id, price, size, bid, ask,
       slip_abs, slip_bps, direction,
