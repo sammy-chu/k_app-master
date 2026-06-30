@@ -175,6 +175,9 @@ src/init-alerts.js
 
 ## 6. Configure Environment Variables
 
+See `DEPLOY_ENV.md` for the complete variable checklist extracted from
+`src/server.js`.
+
 Create an environment file outside Git:
 
 ```sh
