@@ -229,6 +229,9 @@ npm run check
 
 ## 8. Initialize App-Owned Tables
 
+See `DEPLOY_DB.md` for the complete database initialization checklist, including
+which tables are app-owned and which source tables must already exist in RDS.
+
 Load the environment:
 
 ```sh
