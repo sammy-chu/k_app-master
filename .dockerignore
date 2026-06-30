@@ -21,7 +21,6 @@ Thumbs.db
 *.txt
 *.bat
 scheme_b_expandable.html
-ETF.csv
 
 # Root-level one-off scripts and tests.
 add*.js

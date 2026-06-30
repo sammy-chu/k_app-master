@@ -29,12 +29,17 @@ Upload or include these files/directories:
 ```text
 package.json
 package-lock.json
+ETF.csv
 src/server.js
 src/config-manager.js
 src/scan-flexible-hills.js
 src/sql/**
 public/**
 ```
+
+`ETF.csv` is included because `src/server.js` looks for it at runtime to apply
+ETF exclusion logic. The app can start without it, but production behavior is
+cleaner and closer to the full local project when the file is present.
 
 Optional database/setup files for initial server provisioning:
 
@@ -48,6 +53,26 @@ src/init-alerts.js
 
 Do not upload `node_modules`; install dependencies on the server with
 `npm ci --omit=dev`.
+
+## Verification Status
+
+This branch was verified as an independent clean deployment candidate:
+
+```text
+Branch: codex/deploy-clean
+Working tree: clean
+npm ci --omit=dev: passed
+npm run check: passed
+Local start: passed with PORT=3000 because port 8889 was already in use
+/health: 200
+Core pages: 200
+Core APIs: 200
+Clean package simulation: passed with only the first deployment file set
+```
+
+The clean package simulation also passed without `ETF.csv`, but logged
+`ETF.csv not found, skipping ETF exclusion`. Include `ETF.csv` in the first
+deployment so ETF exclusion remains active in production.
 
 ## First Deployment Features
 
