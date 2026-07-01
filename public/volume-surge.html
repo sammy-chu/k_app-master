@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <script>window.API_BASE = window.API_BASE || '';</script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>放量监控 · Volume Surge</title>
+  <style>
+    :root {
+      --bg:        #0d1117;
+      --bg-panel:  #161b22;
+      --bg-hover:  #1f2630;
+      --border:    #30363d;
+      --text:      #e6edf3;
+      --text-dim:  #8b949e;
+      --text-mute: #6e7681;
+      --accent:    #58a6ff;
+      --up:        #3fb950;
+      --down:      #f85149;
+      --warn:      #d29922;
+      --hot:       #ff7b72;
+      --col-w-sym:  100px;
+      --col-w-num:  92px;
+      --col-w-time: 84px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text);
+                 font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 13px; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Header ── */
+    header {
+      display: flex; align-items: center; gap: 16px;
+      padding: 10px 16px; background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 10;
+    }
+    header h1 { font-size: 15px; font-weight: 600; margin: 0; }
+    header h1 .pill {
+      display: inline-block; padding: 2px 8px; margin-left: 8px;
+      background: var(--hot); color: #fff; border-radius: 10px;
+      font-size: 11px; font-weight: 700;
+    }
+    .header-right { margin-left: auto; display: flex; align-items: center; gap: 14px;
+                    color: var(--text-dim); font-size: 12px; }
+    .pulse {
+      display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+      background: var(--up); margin-right: 6px; vertical-align: middle;
+      box-shadow: 0 0 6px var(--up);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    .pulse.stale { background: var(--down); box-shadow: 0 0 6px var(--down); animation: none; }
+    .pulse.warn  { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+    .toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+    .toggle input { accent-color: var(--accent); margin: 0; }
+
+    /* ── Filter bar ── */
+    .filter-bar {
+      display: flex; flex-wrap: wrap; gap: 12px;
+      padding: 10px 16px; background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      align-items: center; font-size: 12px;
+    }
+    .filter-group { display: flex; align-items: center; gap: 6px; color: var(--text-dim); }
+    .filter-group input[type=number], .filter-group input[type=text] {
+      width: 88px; background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); padding: 4px 8px; border-radius: 4px; font-size: 12px;
+      font-family: ui-monospace, monospace;
+    }
+    .filter-group input[type=text] { width: 130px; }
+    .filter-group input:focus { outline: none; border-color: var(--accent); }
+    .btn-reset {
+      background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+      padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+    }
+    .btn-reset:hover { background: var(--bg-hover); color: var(--text); }
+
+    /* ── Table ── */
+    .table-wrap { overflow: auto; height: calc(100vh - 100px); }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    thead th {
+      position: sticky; top: 0; background: var(--bg-panel); z-index: 2;
+      padding: 8px 10px; text-align: right; font-weight: 500;
+      color: var(--text-dim); border-bottom: 1px solid var(--border);
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+      white-space: nowrap; cursor: pointer; user-select: none;
+    }
+    thead th:first-child { text-align: left; }
+    thead th:hover { color: var(--text); }
+    thead th.sorted::after { content: ' ▼'; color: var(--accent); font-size: 9px; }
+    thead th.sorted.asc::after { content: ' ▲'; }
+    tbody td {
+      padding: 6px 10px; text-align: right; border-bottom: 1px solid #1a1f26;
+      font-family: ui-monospace, monospace; white-space: nowrap;
+    }
+    tbody tr:hover { background: var(--bg-hover); }
+    tbody td.sym { text-align: left; color: var(--accent); font-weight: 600; }
+    tbody td.dim { color: var(--text-mute); }
+    tbody td.up  { color: var(--up); }
+    tbody td.down{ color: var(--down); }
+    tbody td.hot { color: var(--hot); font-weight: 700; }
+    tbody td.no-data { color: var(--text-mute); font-style: italic; }
+    .ratio-badge {
+      display: inline-block; padding: 1px 6px; border-radius: 3px;
+      font-size: 11px; font-weight: 700;
+    }
+    .ratio-badge.inf { background: var(--hot); color: #fff; }
+    .ratio-badge.hi  { background: rgba(255,123,114,0.18); color: var(--hot); }
+    .ratio-badge.md  { background: rgba(210,153,34,0.18); color: var(--warn); }
+
+    .empty {
+      padding: 60px 20px; text-align: center; color: var(--text-mute);
+    }
+    .empty-icon { font-size: 36px; opacity: 0.4; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>放量监控 <span class="pill" id="count-pill">0</span></h1>
+    <div class="header-right">
+      <span><span class="pulse" id="pulse"></span><span id="status-text">连接中…</span></span>
+      <span id="last-update">—</span>
+      <label class="toggle">
+        <input type="checkbox" id="auto-refresh" checked>
+        <span>自动刷新</span>
+        <select id="interval-sel" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 4px;border-radius:3px;font-size:11px;">
+          <option value="2000">2s</option>
+          <option value="5000" selected>5s</option>
+          <option value="10000">10s</option>
+          <option value="30000">30s</option>
+        </select>
+      </label>
+    </div>
+  </header>
+
+  <div class="filter-bar">
+    <div class="filter-group">
+      <label>最低 ratio</label>
+      <input type="number" id="f-ratio" step="0.5" placeholder="≥">
+    </div>
+    <div class="filter-group">
+      <label>近期成交量 ≥</label>
+      <input type="number" id="f-recvol" step="100" placeholder="≥">
+    </div>
+    <div class="filter-group">
+      <label>价格</label>
+      <input type="number" id="f-price-min" step="0.01" placeholder="≥">
+      <span style="color:var(--text-mute)">~</span>
+      <input type="number" id="f-price-max" step="0.01" placeholder="≤">
+    </div>
+    <div class="filter-group">
+      <label>涨幅%</label>
+      <input type="number" id="f-chg-min" step="0.5" placeholder="≥">
+    </div>
+    <div class="filter-group">
+      <label>代码</label>
+      <input type="text" id="f-symbol" placeholder="搜索/过滤">
+    </div>
+    <button class="btn-reset" id="btn-reset">重置</button>
+    <span style="margin-left:auto;color:var(--text-mute);font-size:11px;" id="filtered-info"></span>
+  </div>
+
+  <div class="table-wrap">
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th data-sort="symbol">代码</th>
+          <th data-sort="ratio" class="sorted">Ratio</th>
+          <th data-sort="recent_volume">近期量</th>
+          <th data-sort="baseline_volume">基准量</th>
+          <th data-sort="recent_rate">近期速率<br><small style="font-size:9px;color:var(--text-mute);">股/秒</small></th>
+          <th data-sort="baseline_rate">基准速率<br><small style="font-size:9px;color:var(--text-mute);">股/秒</small></th>
+          <th data-sort="last_price">最新价</th>
+          <th data-sort="change_pct">涨跌%</th>
+          <th data-sort="bid">Bid</th>
+          <th data-sort="ask">Ask</th>
+          <th data-sort="spread">价差</th>
+          <th data-sort="day_range">日波幅</th>
+          <th data-sort="total_volume">日总量</th>
+          <th data-sort="first_detected_at">首次</th>
+          <th data-sort="updated_at">最近</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div id="empty" class="empty" style="display:none;">
+      <div class="empty-icon">∅</div>
+      <div id="empty-text">当前没有正在放量的股票</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ─────────────── 状态 ───────────────
+  let RAW = [];              // 后端原始数据
+  let SORT_KEY = 'ratio';
+  let SORT_DIR = 'desc';
+  let TIMER = null;
+  let LAST_OK = 0;
+
+  const $ = (id) => document.getElementById(id);
+  const tbody = $('tbody');
+
+  // ─────────────── 数值格式化 ───────────────
+  const fmtInt = (v) => v == null ? '—' : Number(v).toLocaleString();
+  const fmtNum = (v, d=2) => v == null ? '—' : Number(v).toFixed(d);
+  const fmtPct = (v, d=2) => v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(d) + '%';
+  const fmtTime = (iso) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleTimeString('zh-CN', { hour12: false });
+  };
+  const ratioClass = (r) => {
+    if (r === null) return 'inf';
+    if (r >= 20) return 'hi';
+    if (r >= 5)  return 'md';
+    return '';
+  };
+
+  // ─────────────── 拉数据 ───────────────
+  async function fetchData() {
+    try {
+      const r = await fetch(window.API_BASE + '/api/volume-surge', { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      RAW = data.symbols || [];
+      LAST_OK = Date.now();
+      $('count-pill').textContent = RAW.length;
+      $('pulse').className = 'pulse';
+      $('status-text').textContent = '已连接';
+      $('last-update').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      render();
+    } catch (e) {
+      $('pulse').className = 'pulse stale';
+      $('status-text').textContent = '连接失败 (' + e.message + ')';
+    }
+  }
+
+  // ─────────────── 筛选 ───────────────
+  function applyFilters(rows) {
+    const fRatio  = parseFloat($('f-ratio').value);
+    const fRecVol = parseFloat($('f-recvol').value);
+    const fPMin   = parseFloat($('f-price-min').value);
+    const fPMax   = parseFloat($('f-price-max').value);
+    const fChgMin = parseFloat($('f-chg-min').value);
+    const fSym    = $('f-symbol').value.trim().toUpperCase();
+
+    return rows.filter(r => {
+      // ratio==null 视为无穷大,总是通过
+      if (!isNaN(fRatio) && r.ratio !== null && r.ratio < fRatio) return false;
+      if (!isNaN(fRecVol) && r.recent_volume < fRecVol) return false;
+      if (!isNaN(fPMin) && (r.last_price == null || r.last_price < fPMin)) return false;
+      if (!isNaN(fPMax) && (r.last_price == null || r.last_price > fPMax)) return false;
+      if (!isNaN(fChgMin) && (r.change_pct == null || r.change_pct < fChgMin)) return false;
+      if (fSym && !r.symbol.includes(fSym)) return false;
+      return true;
+    });
+  }
+
+  // ─────────────── 排序 ───────────────
+  function applySort(rows) {
+    const k = SORT_KEY, dir = SORT_DIR === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      let va = a[k], vb = b[k];
+      // ratio: null 视为无穷大
+      if (k === 'ratio') {
+        if (va === null && vb === null) return 0;
+        if (va === null) return -1 * dir;
+        if (vb === null) return  1 * dir;
+      }
+      // 时间字符串
+      if (k === 'first_detected_at' || k === 'updated_at') {
+        va = va ? new Date(va).getTime() : 0;
+        vb = vb ? new Date(vb).getTime() : 0;
+      }
+      if (typeof va === 'string') {
+        return va.localeCompare(vb) * dir;
+      }
+      if (va == null) va = -Infinity;
+      if (vb == null) vb = -Infinity;
+      return (va - vb) * dir;
+    });
+  }
+
+  // ─────────────── 渲染 ───────────────
+  function render() {
+    const filtered = applyFilters(RAW);
+    const sorted   = applySort(filtered);
+
+    $('filtered-info').textContent =
+      filtered.length === RAW.length
+        ? ''
+        : `筛选: ${filtered.length} / ${RAW.length}`;
+
+    if (sorted.length === 0) {
+      tbody.innerHTML = '';
+      $('empty').style.display = 'block';
+      $('empty-text').textContent = RAW.length === 0
+        ? '当前没有正在放量的股票'
+        : '没有符合筛选条件的股票';
+      return;
+    }
+    $('empty').style.display = 'none';
+
+    // 用 DocumentFragment 一次性插入
+    const frag = document.createDocumentFragment();
+    for (const r of sorted) {
+      const tr = document.createElement('tr');
+      const chgCls = r.change_pct == null ? 'dim' : (r.change_pct >= 0 ? 'up' : 'down');
+      const ratioStr = r.ratio === null ? '∞' : r.ratio.toFixed(2) + '×';
+      const noPrice = !r.has_market_data;
+
+      tr.innerHTML = `
+        <td class="sym">${r.symbol}</td>
+        <td><span class="ratio-badge ${ratioClass(r.ratio)}">${ratioStr}</span></td>
+        <td class="hot">${fmtInt(r.recent_volume)}</td>
+        <td class="dim">${fmtInt(r.baseline_volume)}</td>
+        <td>${fmtNum(r.recent_rate)}</td>
+        <td class="dim">${fmtNum(r.baseline_rate)}</td>
+        <td class="${noPrice ? 'no-data' : ''}">${noPrice ? 'n/a' : fmtNum(r.last_price, 4)}</td>
+        <td class="${chgCls}">${fmtPct(r.change_pct)}</td>
+        <td class="dim">${noPrice ? '—' : fmtNum(r.bid, 4)}</td>
+        <td class="dim">${noPrice ? '—' : fmtNum(r.ask, 4)}</td>
+        <td class="dim">${noPrice ? '—' : fmtNum(r.spread, 4)}</td>
+        <td class="dim">${noPrice ? '—' : fmtNum(r.day_range, 4)}</td>
+        <td class="dim">${fmtInt(r.total_volume)}</td>
+        <td class="dim">${fmtTime(r.first_detected_at)}</td>
+        <td class="dim">${fmtTime(r.updated_at)}</td>
+      `;
+      frag.appendChild(tr);
+    }
+    tbody.innerHTML = '';
+    tbody.appendChild(frag);
+  }
+
+  // ─────────────── 自动刷新调度 ───────────────
+  function reschedule() {
+    if (TIMER) { clearInterval(TIMER); TIMER = null; }
+    if ($('auto-refresh').checked) {
+      const ms = parseInt($('interval-sel').value, 10);
+      TIMER = setInterval(fetchData, ms);
+    }
+  }
+
+  // ─────────────── 心跳检测(超 30s 没更新成功就告警) ───────────────
+  setInterval(() => {
+    if (LAST_OK && Date.now() - LAST_OK > 30000) {
+      $('pulse').className = 'pulse warn';
+      $('status-text').textContent = '数据过期 (>' + Math.floor((Date.now()-LAST_OK)/1000) + 's)';
+    }
+  }, 2000);
+
+  // ─────────────── 事件绑定 ───────────────
+  document.querySelectorAll('thead th').forEach(th => {
+    th.addEventListener('click', () => {
+      const k = th.dataset.sort;
+      if (!k) return;
+      if (SORT_KEY === k) {
+        SORT_DIR = SORT_DIR === 'asc' ? 'desc' : 'asc';
+      } else {
+        SORT_KEY = k;
+        SORT_DIR = 'desc';
+      }
+      document.querySelectorAll('thead th').forEach(x => {
+        x.classList.remove('sorted', 'asc');
+      });
+      th.classList.add('sorted');
+      if (SORT_DIR === 'asc') th.classList.add('asc');
+      render();
+    });
+  });
+
+  ['f-ratio','f-recvol','f-price-min','f-price-max','f-chg-min','f-symbol'].forEach(id => {
+    $(id).addEventListener('input', render);
+  });
+
+  $('btn-reset').addEventListener('click', () => {
+    ['f-ratio','f-recvol','f-price-min','f-price-max','f-chg-min','f-symbol'].forEach(id => $(id).value = '');
+    render();
+  });
+
+  $('auto-refresh').addEventListener('change', reschedule);
+  $('interval-sel').addEventListener('change', reschedule);
+
+  // ─────────────── 启动 ───────────────
+  fetchData();
+  reschedule();
+})();
+</script>
+
+</body>
+</html>
