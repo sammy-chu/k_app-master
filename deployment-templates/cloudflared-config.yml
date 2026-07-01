@@ -1,0 +1,13 @@
+# ~/.cloudflared/config.yml
+# 本机 Cloudflare Tunnel 配置文件
+
+# 替换为你使用 `cloudflared tunnel create k-app` 时生成的 TUNNEL_ID
+tunnel: <TUNNEL_ID>
+credentials-file: /root/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  # 替换为你的后端 API 域名
+  - hostname: api.yourdomain.com
+    # 你的 server.js 运行在 3000 端口
+    service: http://localhost:3000
+  - service: http_status:404
