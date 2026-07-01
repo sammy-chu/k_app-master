@@ -1,0 +1,1346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>边界预警</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #1a1a1a;
+    color: #ddd;
+    padding: 20px;
+    line-height: 1.6;
+  }
+  .container { max-width: 1600px; margin: 0 auto; }
+
+  /* ── 导航 ── */
+  .nav-links { text-align: center; margin-bottom: 20px; }
+  .nav-links a {
+    color: #007acc; text-decoration: none; padding: 6px 14px; margin: 0 6px;
+    border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;
+    display: inline-block; font-size: 13px;
+  }
+  .nav-links a:hover { background-color: #007acc; color: white; }
+  .nav-links a.active { background-color: #007acc; color: white; }
+
+  /* ── 标题栏 ── */
+  .header-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 16px; border-bottom: 1px solid #333; padding-bottom: 12px;
+  }
+  .title { font-size: 1.4em; color: #ddd; font-weight: normal; }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+  .refresh-info { font-size: 12px; color: #888; white-space: nowrap; }
+  .status-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: #555; margin-right: 6px; vertical-align: middle;
+    transition: background 0.3s;
+  }
+  .status-dot.live  { background: #26a69a; box-shadow: 0 0 5px #26a69a; }
+  .status-dot.error { background: #ef5350; }
+
+  /* ── 筛选面板 ── */
+  .filter-panel-wrap { margin-bottom: 14px; }
+  .filter-toggle-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 14px; background: #2a2a2a; border-radius: 6px;
+    cursor: pointer; user-select: none;
+    border: 1px solid #333; transition: border-color 0.15s;
+  }
+  .filter-toggle-bar:hover { border-color: #444; }
+  .filter-toggle-left { display: flex; align-items: center; gap: 10px; }
+  .filter-toggle-label { font-size: 12px; color: #666; }
+  .filter-active-pills { display: flex; gap: 5px; flex-wrap: wrap; }
+  .filter-pill {
+    font-size: 11px; padding: 1px 8px; border-radius: 10px;
+    background: #007acc1a; border: 1px solid #007acc44; color: #7ac0f0;
+  }
+  .filter-chevron { font-size: 10px; color: #555; transition: transform 0.2s ease; }
+  .filter-chevron.open { transform: rotate(180deg); }
+  .filter-body {
+    overflow: hidden; max-height: 0; opacity: 0;
+    transition: max-height 0.25s ease, opacity 0.2s ease;
+  }
+  .filter-body.open { max-height: 180px; opacity: 1; }
+  .filter-panel {
+    background: #2a2a2a; padding: 12px 16px 14px;
+    border-radius: 0 0 6px 6px; border-top: 1px solid #333;
+    display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: flex-end;
+  }
+  .filter-group { display: flex; flex-direction: column; gap: 4px; }
+  .filter-group label { font-size: 12px; color: #888; }
+  .filter-row { display: flex; align-items: center; gap: 5px; }
+  .filter-sep { font-size: 12px; color: #555; }
+
+  input[type=number], input[type=text] {
+    background: #1a1a1a; border: 1px solid #444; color: #ddd;
+    padding: 5px 8px; border-radius: 4px; font-size: 13px;
+    outline: none; transition: border-color 0.15s;
+  }
+  input[type=number] { width: 80px; -moz-appearance: textfield; }
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+  input[type=number]:focus, input[type=text]:focus { border-color: #007acc; }
+  input[type=number]::placeholder,
+  input[type=text]::placeholder { color: #555; }
+  input[type=number].has-value { border-color: #007acc55; color: #7ac0f0; }
+
+  .filter-actions { display: flex; align-items: flex-end; gap: 8px; margin-left: auto; }
+  .btn {
+    padding: 6px 16px; border-radius: 4px; border: 1px solid #444;
+    background: #1a1a1a; color: #ccc; font-size: 13px; cursor: pointer;
+    transition: all 0.15s; white-space: nowrap;
+  }
+  .btn:hover { border-color: #888; color: #fff; }
+  .btn.primary { border-color: #007acc; color: #7ac0f0; background: #007acc18; }
+  .btn.primary:hover { background: #007acc30; }
+
+  /* ── 屏蔽管理按钮 ── */
+  .block-btn {
+    background: #1a1a1a; border: 1px solid #444; color: #aaa;
+    padding: 5px 12px; border-radius: 4px; font-size: 13px;
+    cursor: pointer; transition: all 0.15s; white-space: nowrap;
+  }
+  .block-btn:hover { border-color: #ef5350; color: #ef5350; }
+  .block-btn.has-blocked { border-color: #ef5350; color: #ef5350; }
+
+  /* ── 右键菜单 ── */
+  #ctx-menu {
+    position: fixed; background: #2a2a2a; border: 1px solid #444;
+    border-radius: 4px; padding: 4px 0; z-index: 9999; min-width: 150px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5); display: none;
+  }
+  #ctx-menu .ctx-item { padding: 8px 14px; font-size: 13px; cursor: pointer; color: #ddd; white-space: nowrap; }
+  #ctx-menu .ctx-item:hover { background: #3a3a3a; }
+  #ctx-menu .ctx-item.danger { color: #ef5350; }
+
+  /* ── 屏蔽管理浮层 ── */
+  #block-modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    z-index: 9000; align-items: center; justify-content: center;
+  }
+  #block-modal-overlay.open { display: flex; }
+  #block-modal {
+    background: #252525; border: 1px solid #444; border-radius: 8px;
+    width: 420px; max-height: 70vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 16px; border-bottom: 1px solid #333; font-size: 14px; color: #ddd;
+  }
+  .modal-close { background: none; border: none; color: #666; font-size: 18px; cursor: pointer; line-height: 1; }
+  .modal-close:hover { color: #ddd; }
+  .modal-add { display: flex; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #333; }
+  .modal-add input { flex: 1; }
+  .modal-add button {
+    background: none; border: 1px solid #555; color: #aaa; padding: 5px 12px;
+    border-radius: 3px; font-size: 13px; cursor: pointer; white-space: nowrap;
+  }
+  .modal-add button:hover { border-color: #ef5350; color: #ef5350; }
+  .modal-body { flex: 1; overflow-y: auto; padding: 10px 16px; }
+  .modal-empty { text-align: center; padding: 30px; color: #555; font-size: 13px; }
+  .block-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 0; border-bottom: 1px solid #2e2e2e; font-size: 13px;
+  }
+  .block-item:last-child { border-bottom: none; }
+  .block-item-code { color: #fff; font-weight: 600; }
+  .unblock-btn {
+    background: none; border: 1px solid #555; color: #aaa; padding: 2px 8px;
+    border-radius: 3px; font-size: 12px; cursor: pointer;
+  }
+  .unblock-btn:hover { border-color: #26a69a; color: #26a69a; }
+  .modal-footer { padding: 10px 16px; border-top: 1px solid #333; display: flex; justify-content: flex-end; gap: 8px; }
+  .modal-footer button {
+    padding: 5px 14px; border-radius: 3px; font-size: 13px; cursor: pointer;
+    border: 1px solid #555; background: none; color: #aaa;
+  }
+  .modal-footer button:hover { border-color: #ddd; color: #ddd; }
+  .modal-footer .btn-danger { border-color: #ef5350; color: #ef5350; }
+  .modal-footer .btn-danger:hover { background: rgba(239,83,80,0.12); }
+
+  /* ── 代码列：行内屏蔽按钮，hover 时显示 ── */
+  .symbol-cell { display: inline-flex; align-items: center; gap: 5px; }
+  .btn-block-inline {
+    display: none; background: none; border: 1px solid #555; color: #777;
+    font-size: 11px; line-height: 1; padding: 1px 4px; border-radius: 3px;
+    cursor: pointer; flex-shrink: 0;
+  }
+  tr:hover .btn-block-inline { display: inline-block; }
+  .btn-block-inline:hover { border-color: #ef5350; color: #ef5350; }
+
+  /* ── 状态栏 ── */
+  .status-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; color: #888; margin-bottom: 8px; padding: 0 2px;
+  }
+  .rule-summary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .rule-tag {
+    padding: 2px 8px; border-radius: 3px; font-size: 11px;
+    border: 1px solid #ffa72644; color: #ffa726; background: #ffa7260a;
+  }
+
+  /* ── 代码查询框 ── */
+  .lookup-panel {
+    background: #222; border: 1px solid #333; border-radius: 6px;
+    margin-bottom: 14px; padding: 12px 16px;
+  }
+  .lookup-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .lookup-row label { font-size: 12px; color: #888; white-space: nowrap; }
+  #symbolInput {
+    width: 130px; font-size: 14px; font-weight: bold;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .lookup-result {
+    margin-top: 10px; display: none;
+    background: #1a1a1a; border: 1px solid #333; border-radius: 4px;
+    padding: 10px 14px;
+  }
+  .lookup-result.show { display: block; }
+
+  /* 历史时间点面板 */
+  .history-panel {
+    margin-top: 10px; display: none;
+    background: #1a1a1a; border: 1px solid #333; border-radius: 4px;
+    padding: 12px 14px;
+  }
+  .history-panel.show { display: block; }
+  .history-header {
+    font-size: 12px; color: #666; margin-bottom: 10px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .history-header strong { color: #aaa; }
+  .history-empty { font-size: 13px; color: #555; padding: 6px 0; }
+  .timeline { display: flex; flex-direction: column; position: relative; }
+  .timeline::before {
+    content: ''; position: absolute; left: 56px; top: 8px; bottom: 8px;
+    width: 1px; background: #2e2e2e; z-index: 0;
+  }
+  .tl-item { display: flex; align-items: flex-start; gap: 12px; padding: 5px 0; }
+  .tl-time { font-size: 12px; color: #888; white-space: nowrap; width: 48px; text-align: right; padding-top: 3px; flex-shrink: 0; }
+  .tl-dot { width: 9px; height: 9px; border-radius: 50%; background: #ffa726; flex-shrink: 0; margin-top: 4px; position: relative; z-index: 1; box-shadow: 0 0 0 2px #1a1a1a; }
+  .tl-dot.current { background: #ffd54f; box-shadow: 0 0 0 2px #1a1a1a, 0 0 6px #ffd54f88; }
+  .tl-body { flex: 1; }
+  .tl-label { font-size: 12px; color: #aaa; }
+  .tl-label.current { color: #ffd54f; }
+  .tl-vals { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; font-size: 11px; color: #555; }
+  .tl-val-item span { color: #ffa726; }
+  .lookup-sym {
+    font-size: 16px; font-weight: bold; color: #fff; margin-bottom: 8px;
+  }
+  .lookup-sym span { font-size: 12px; font-weight: normal; margin-left: 10px; }
+  .lookup-sym .pass-all { color: #26a69a; }
+  .lookup-sym .fail-some { color: #ef5350; }
+  .lookup-sym .no-data { color: #888; }
+  .rule-detail-grid {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
+    margin-top: 6px;
+  }
+  .rule-card {
+    background: #252525; border-radius: 4px; padding: 8px 10px;
+    border-left: 3px solid #333;
+  }
+  .rule-card.pass { border-left-color: #26a69a; }
+  .rule-card.fail { border-left-color: #ef5350; }
+  .rule-card.na   { border-left-color: #444; opacity: 0.6; }
+  .rule-card-title { font-size: 11px; color: #666; margin-bottom: 3px; }
+  .rule-card-value { font-size: 13px; font-weight: bold; }
+  .rule-card.pass .rule-card-value { color: #26a69a; }
+  .rule-card.fail .rule-card-value { color: #ef5350; }
+  .rule-card.na   .rule-card-value { color: #555; }
+  .rule-card-threshold { font-size: 10px; color: #555; margin-top: 2px; }
+  .fail-reason-banner {
+    margin-top: 8px; padding: 6px 10px; border-radius: 4px;
+    background: #ef53500f; border: 1px solid #ef535033;
+    color: #ef9d9b; font-size: 12px;
+  }
+  .pass-reason-banner {
+    margin-top: 8px; padding: 6px 10px; border-radius: 4px;
+    background: #26a69a0f; border: 1px solid #26a69a33;
+    color: #26a69a; font-size: 12px;
+  }
+
+  /* ── 表格 ── */
+  table {
+    width: 100%; border-collapse: collapse;
+    background-color: #252525; border-radius: 8px; overflow: hidden;
+    font-size: 13px;
+  }
+  th, td { padding: 9px 12px; text-align: right; border-bottom: 1px solid #2e2e2e; }
+  th {
+    background-color: #333; color: #bbb; font-weight: 600;
+    font-size: 12px; cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  th:hover { color: #fff; }
+  th.sort-asc::after  { content: ' ↑'; color: #007acc; }
+  th.sort-desc::after { content: ' ↓'; color: #007acc; }
+  th:first-child, td:first-child { text-align: left; padding-left: 14px; }
+  tr:hover td { background-color: #2a2a2a; }
+
+  .sym { font-weight: bold; color: #fff; font-size: 14px; cursor: pointer; }
+  .sym:hover { color: #7ac0f0; text-decoration: underline; }
+  .up   { color: #26a69a; }
+  .down { color: #ef5350; }
+  .flat { color: #888; }
+
+  /* ── 触发类型徽标 ── */
+  .trigger-badge {
+    display: inline-block; font-size: 11px; padding: 1px 7px;
+    border-radius: 3px; font-weight: bold; margin-left: 4px;
+    vertical-align: middle;
+  }
+  .trigger-4a {
+    background: #26a69a18; border: 1px solid #26a69a55; color: #26a69a;
+  }
+  .trigger-4b {
+    background: #ffa72618; border: 1px solid #ffa72655; color: #ffa726;
+  }
+  .trigger-4a-up {
+    background: #26a69a30; border: 1px solid #26a69a88; color: #4dd0c4;
+  }
+  .trigger-4b-up {
+    background: #ffa72630; border: 1px solid #ffa72688; color: #ffcc02;
+  }
+
+  /* ── 置顶闪烁行 ── */
+  @keyframes flash-row {
+    0%, 100% { background-color: transparent; }
+    50%       { background-color: #ffa72610; }
+  }
+  tr.pinned td { font-weight: 500; }
+  tr.pinned { animation: flash-row 1.2s ease-in-out infinite; border-left: 2px solid #ffa726; }
+  .pin-badge {
+    font-size: 10px; padding: 1px 5px; border-radius: 2px;
+    background: #ffa72622; border: 1px solid #ffa72655;
+    color: #ffa726; margin-left: 5px; vertical-align: middle;
+  }
+
+  /* ── 倒计时进度条 ── */
+  .expire-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .expire-time { font-size: 12px; color: #888; }
+  .expire-bar { width: 48px; height: 3px; background: #333; border-radius: 2px; overflow: hidden; }
+  .expire-bar-fill { height: 100%; border-radius: 2px; transition: width 1s linear; }
+  .expire-bar-fill.fresh  { background: #26a69a; }
+  .expire-bar-fill.mid    { background: #ffa726; }
+  .expire-bar-fill.ending { background: #ef5350; }
+
+  /* ── A/B 价格条 ── */
+  .ab-cell {
+    display: flex; flex-direction: column; align-items: flex-end;
+    gap: 1px; font-size: 12px;
+  }
+  .ab-a { color: #26a69a; }
+  .ab-b { color: #ffa726; }
+
+  /* ── 计数胶囊 ── */
+  .count-cell { display: flex; justify-content: flex-end; gap: 5px; }
+  .cnt {
+    font-size: 11px; padding: 1px 6px; border-radius: 3px;
+    font-weight: bold;
+  }
+  .cnt-a { background: #26a69a18; border: 1px solid #26a69a44; color: #26a69a; }
+  .cnt-b { background: #ffa72618; border: 1px solid #ffa72644; color: #ffa726; }
+  .cnt-a.hi { background: #26a69a35; border-color: #26a69a88; color: #4dd0c4; }
+  .cnt-b.hi { background: #ffa72635; border-color: #ffa72888; color: #ffcc02; }
+
+  /* vol bar */
+  .vol-cell { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+  .mini-bar { width: 32px; height: 3px; background: #333; border-radius: 2px; overflow: hidden; flex-shrink: 0; }
+  .mini-bar-fill { height: 100%; background: #007acc; border-radius: 2px; }
+
+  .empty-row td { text-align: center; padding: 60px; color: #555; }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid #333; border-top-color: #007acc;
+    border-radius: 50%; animation: spin 0.7s linear infinite;
+    vertical-align: middle; margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (max-width: 900px) {
+    .filter-panel { gap: 10px; }
+    .header-bar { flex-direction: column; align-items: flex-start; gap: 8px; }
+    #block-modal { width: 90vw; }
+    .rule-detail-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- 导航 -->
+  <div class="nav-links">
+    <a href="/alerts">价格提醒</a>
+    <a href="/volume-alerts">放量提醒</a>
+    <a href="/hills">山丘形态</a>
+    <a href="/hill-alerts">山丘放量</a>
+    <a href="/ranking">涨跌排名</a>
+    <a href="/l2-alerts">L2大单</a>
+    <a href="/screener">选股器</a>
+    <a href="/swing-screener">波段扫描</a>
+    <a href="/stable-screener">稳定选股</a>
+    <a href="/oscillator-screener">震荡筛选</a>
+    <a href="/boundary-alerts" class="active">边界预警</a>
+    <a href="/active-trading">活跃主买</a>
+    <a href="/abnormal-trades">异常成交</a>
+  </div>
+
+  <!-- 标题栏 -->
+  <div class="header-bar">
+    <h1 class="title">边界预警
+      <span style="font-size:0.6em;color:#555;margin-left:8px;">7分钟滚动窗口 · 边界高频试探 · 主力试盘捕捉</span>
+    </h1>
+    <div class="header-right">
+      <button class="block-btn" id="btn-manage-block" onclick="openBlockModal()">🚫 屏蔽管理</button>
+      <span id="status-text" style="font-size:12px;color:#888;">
+        <span class="status-dot" id="status-dot"></span>初始化
+      </span>
+      <span class="refresh-info" id="refresh-timer">10s 后刷新</span>
+    </div>
+  </div>
+
+  <!-- 筛选面板 -->
+  <div class="filter-panel-wrap">
+    <div class="filter-toggle-bar" onclick="toggleFilter()">
+      <div class="filter-toggle-left">
+        <span class="filter-toggle-label">筛选条件</span>
+        <div class="filter-active-pills" id="filterPills"></div>
+      </div>
+      <span class="filter-chevron" id="filterChevron">▼</span>
+    </div>
+    <div class="filter-body" id="filterBody">
+      <div class="filter-panel">
+        <div class="filter-group">
+          <label>价格区间</label>
+          <div class="filter-row">
+            <input type="number" id="priceMin" placeholder="最低" step="1" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="priceMax" placeholder="最高" step="1" min="0">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label>今日成交量</label>
+          <div class="filter-row">
+            <input type="number" id="volMin" placeholder="最低" step="1000" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="volMax" placeholder="最高" step="1000" min="0">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label>当日波动区间</label>
+          <div class="filter-row">
+            <input type="number" id="dayRangeMin" placeholder="最低" step="0.1" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="dayRangeMax" placeholder="最高" step="0.1" min="0">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label>十日波动均值</label>
+          <div class="filter-row">
+            <input type="number" id="avgRangeMin" placeholder="最低" step="0.1" min="0">
+            <span class="filter-sep">—</span>
+            <input type="number" id="avgRangeMax" placeholder="最高" step="0.1" min="0">
+          </div>
+        </div>
+        <div class="filter-group" style="min-width: 180px;">
+          <label>屏蔽股票 (逗号分隔或回车)</label>
+          <div class="filter-row">
+            <input type="text" id="blockInput" placeholder="如 AAPL, TSLA" style="width: 120px; text-transform: uppercase;">
+            <button class="btn" onclick="addBlocked()">屏蔽</button>
+          </div>
+          <div class="filter-active-pills" id="blockedPills" style="margin-top: 6px; max-width: 220px;"></div>
+        </div>
+        <div class="filter-actions">
+          <button class="btn" onclick="clearFilters()">清空</button>
+          <button class="btn primary" onclick="applyFilter()">筛选</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 代码查询面板 -->
+  <div class="lookup-panel">
+    <div class="lookup-row">
+      <label>查询单只股票为何没有/有边界预警</label>
+      <input type="text" id="symbolInput" placeholder="输入代码" maxlength="20"
+             oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter')handleLookup()">
+      <input type="text" id="timeFrom" placeholder="开始 HH:MM" maxlength="5"
+             style="width:108px;"
+             oninput="this.value=this.value.replace(/[^0-9:]/g,'')"
+             onkeydown="if(event.key==='Enter')handleLookup()">
+      <span style="font-size:12px;color:#555;">—</span>
+      <input type="text" id="timeTo" placeholder="结束 HH:MM" maxlength="5"
+             style="width:108px;"
+             oninput="this.value=this.value.replace(/[^0-9:]/g,'')"
+             onkeydown="if(event.key==='Enter')handleLookup()">
+      <button class="btn" onclick="handleLookup()">查询</button>
+      <button class="btn" onclick="lookupHistory()" title="查询今日满足全部触发条件的历史时间点">📅 今日时间点</button>
+      <button class="btn" onclick="clearLookup()" style="color:#555;border-color:#333;">清除</button>
+      <span style="font-size:12px;color:#555;margin-left:4px;">时间留空查实时，填时间查历史快照</span>
+    </div>
+    <div class="lookup-result" id="lookupResult"></div>
+    <div class="history-panel" id="historyPanel"></div>
+  </div>
+
+  <!-- 状态栏 -->
+  <div class="status-bar">
+    <div class="rule-summary">
+      <span class="rule-tag">7分钟滚动窗口</span>
+      <span class="rule-tag">A = 低点 + 振幅 × 20%</span>
+      <span class="rule-tag">B = 低点 + 振幅 × 80%</span>
+      <span class="rule-tag">绝对约束 &lt; 0.15元</span>
+      <span class="rule-tag">周期成交 &gt; 100股</span>
+      <span class="rule-tag">触碰 ≥ 4次预警 · 同向达6次升级置顶闪烁2分钟</span>
+      <span class="rule-tag">突破30分钟轨道才触发</span>
+    </div>
+    <span id="count-info">—</span>
+  </div>
+
+  <!-- 主表格 -->
+  <table>
+    <thead>
+      <tr>
+        <th onclick="sortBy('symbol')">代码</th>
+        <th onclick="sortBy('last_price')">现价</th>
+        <th onclick="sortBy('change_pct')">涨跌%</th>
+        <th onclick="sortBy('total_volume')">今日量</th>
+        <th onclick="sortBy('day_range')">当日波动</th>
+        <th onclick="sortBy('avg_range')">10日均波动</th>
+        <th onclick="sortBy('winHigh')" title="7分钟窗口高低点">窗口高/低</th>
+        <th onclick="sortBy('priceA')" title="预警价A（下轨20%）和B（上轨80%）；首次触发需7分钟预警线落在30分钟轨道的对应突破区间内">A价 / B价</th>
+        <th onclick="sortBy('maxA')" title="周期内触碰下轨(a)和上轨(b)的K线数；9点后按A/B最大值排序" class="sort-desc">触碰次数</th>
+        <th onclick="sortBy('cycleVol')" title="7分钟周期内成交量">周期量</th>
+        <th onclick="sortBy('anchorTime')" title="首次触发时间及到期倒计时">触发 / 剩余</th>
+      </tr>
+    </thead>
+    <tbody id="tbody">
+      <tr class="empty-row"><td colspan="11"><span class="spinner"></span>加载中...</td></tr>
+    </tbody>
+  </table>
+
+</div>
+
+<!-- 右键菜单 -->
+<div id="ctx-menu">
+  <div class="ctx-item danger" id="ctx-block">屏蔽此股票</div>
+</div>
+
+<!-- 屏蔽管理浮层 -->
+<div id="block-modal-overlay" onclick="closeBlockModal(event)">
+  <div id="block-modal">
+    <div class="modal-header">
+      <span>🚫 屏蔽股票管理 <span style="color:#555;font-size:12px;margin-left:8px">仅存本机浏览器</span></span>
+      <button class="modal-close" onclick="closeBlockModal()">×</button>
+    </div>
+    <div class="modal-add">
+      <input type="text" id="manual-block-input" placeholder="手动输入代码,如 AAPL">
+      <button onclick="addManualBlock()">添加屏蔽</button>
+    </div>
+    <div class="modal-body" id="block-list"></div>
+    <div class="modal-footer">
+      <button class="btn-danger" onclick="clearAllBlocked()">清空全部</button>
+      <button onclick="closeBlockModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── STATE ─────────────────────────────────────────────────────────────────
+let allData    = [];
+let sortedData = [];
+let sortKey    = 'maxA';
+let sortDir    = -1;
+let maxVol     = 1;
+let countdown  = 10;
+let isFetching = false;
+let blockedStocks = JSON.parse(localStorage.getItem('sharedBlockedStocks') || '[]');
+
+const SORT_KEYS = ['symbol','last_price','change_pct','total_volume','day_range','avg_range','winHigh','priceA','maxA','cycleVol','anchorTime'];
+const FILTER_IDS = ['priceMin','priceMax','volMin','volMax','dayRangeMin','dayRangeMax','avgRangeMin','avgRangeMax'];
+
+// ── BLOCKED STOCKS ────────────────────────────────────────────────────────
+function saveBlocked() {
+  localStorage.setItem('sharedBlockedStocks', JSON.stringify(blockedStocks));
+  const btn = document.getElementById('btn-manage-block');
+  if (btn) {
+    if (blockedStocks.length > 0) {
+      btn.classList.add('has-blocked');
+      btn.textContent = `🚫 屏蔽管理 (${blockedStocks.length})`;
+    } else {
+      btn.classList.remove('has-blocked');
+      btn.textContent = '🚫 屏蔽管理';
+    }
+  }
+  renderBlockedPills();
+  renderBlockList();
+}
+
+function blockStock(sym) {
+  sym = (sym || '').trim().toUpperCase();
+  if (!sym || blockedStocks.includes(sym)) return;
+  blockedStocks.push(sym);
+  saveBlocked();
+  applyFilter();
+}
+
+function unblockStock(sym) {
+  blockedStocks = blockedStocks.filter(s => s !== sym);
+  saveBlocked();
+  applyFilter();
+}
+
+function clearAllBlocked() {
+  if (blockedStocks.length === 0) return;
+  if (!confirm('确认清空所有屏蔽股票?')) return;
+  blockedStocks = [];
+  saveBlocked();
+  applyFilter();
+}
+
+function renderBlockedPills() {
+  const pills = document.getElementById('blockedPills');
+  if (!pills) return;
+  pills.innerHTML = blockedStocks.map(sym => 
+    `<span class="filter-pill" style="background:#ef53501a; border-color:#ef535044; color:#ef5350; display:flex; align-items:center;">
+      ${sym} <span style="cursor:pointer; margin-left:4px; font-weight:bold; font-size:12px;" onclick="unblockStock('${sym}')">×</span>
+    </span>`
+  ).join('');
+}
+
+function addBlocked() {
+  const input = document.getElementById('blockInput');
+  if (!input) return;
+  const val = input.value.trim().toUpperCase();
+  if (!val) return;
+
+  const symbols = val.split(/[,，\s]+/).map(s => s.trim()).filter(s => s);
+  for (const sym of symbols) blockStock(sym);
+  input.value = '';
+}
+
+function addManualBlock() {
+  const input = document.getElementById('manual-block-input');
+  if (!input) return;
+  const val = input.value.trim().toUpperCase();
+  if (!val) return;
+  const symbols = val.split(/[,，\s]+/).map(s => s.trim()).filter(s => s);
+  for (const sym of symbols) blockStock(sym);
+  input.value = '';
+}
+
+function openBlockModal() {
+  renderBlockList();
+  document.getElementById('block-modal-overlay').classList.add('open');
+}
+
+function closeBlockModal(e) {
+  if (e && e.target !== document.getElementById('block-modal-overlay')) return;
+  document.getElementById('block-modal-overlay').classList.remove('open');
+}
+
+function renderBlockList() {
+  const container = document.getElementById('block-list');
+  if (!container) return;
+  if (blockedStocks.length === 0) {
+    container.innerHTML = '<div class="modal-empty">暂无屏蔽股票</div>';
+    return;
+  }
+  container.innerHTML = [...blockedStocks].sort().map(sym => `
+    <div class="block-item">
+      <span class="block-item-code">${sym}</span>
+      <button class="unblock-btn" onclick="unblockStock('${sym}')">解除屏蔽</button>
+    </div>
+  `).join('');
+}
+
+
+// ── FILTER TOGGLE ─────────────────────────────────────────────────────────
+let filterOpen = false;
+function toggleFilter() {
+  filterOpen = !filterOpen;
+  document.getElementById('filterBody').classList.toggle('open', filterOpen);
+  document.getElementById('filterChevron').classList.toggle('open', filterOpen);
+}
+
+function getV(id) {
+  const v = document.getElementById(id)?.value.trim();
+  return (!v || v === '') ? null : Number(v);
+}
+
+// 判断北京时间是否已过 9:00（开盘8:00后1小时）
+// 8:00-9:00 触碰次数排序仅看 maxA；9:00 之后 A/B 权限合并，取 max(maxA, maxB)
+function isAfter9amBJ() {
+  const bj = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+  const h = bj.getHours();
+  return h >= 9;
+}
+
+function getTouchSortValue(row) {
+  const a = Number(row.maxA) || 0;
+  if (!isAfter9amBJ()) return a;
+  const b = Number(row.maxB) || 0;
+  return Math.max(a, b);
+}
+
+function updateHighlights() {
+  FILTER_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('has-value', el.value.trim() !== '');
+  });
+  const pairs = [
+    ['priceMin','priceMax','价格'],
+    ['volMin','volMax','成交量'],
+    ['dayRangeMin','dayRangeMax','当日波动'],
+    ['avgRangeMin','avgRangeMax','10日均波动'],
+  ];
+  const pills = document.getElementById('filterPills');
+  if (!pills) return;
+  pills.innerHTML = pairs
+    .filter(([a, b]) => document.getElementById(a)?.value.trim() || document.getElementById(b)?.value.trim())
+    .map(([a, b, label]) => {
+      const va = document.getElementById(a)?.value.trim();
+      const vb = document.getElementById(b)?.value.trim();
+      const range = va && vb ? `${va}–${vb}` : va ? `≥${va}` : `≤${vb}`;
+      return `<span class="filter-pill">${label} ${range}</span>`;
+    }).join('');
+}
+
+function clearFilters() {
+  FILTER_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.value = ''; el.classList.remove('has-value'); }
+  });
+  applyFilter();
+}
+
+// ── SORT ──────────────────────────────────────────────────────────────────
+function sortBy(key) {
+  if (sortKey === key) sortDir *= -1;
+  else { sortKey = key; sortDir = -1; }
+  document.querySelectorAll('thead th').forEach((th, i) => {
+    th.classList.remove('sort-asc','sort-desc');
+    if (SORT_KEYS[i] === key) th.classList.add(sortDir === -1 ? 'sort-desc' : 'sort-asc');
+  });
+  applyFilter();
+}
+
+// ── FETCH ─────────────────────────────────────────────────────────────────
+async function fetchData() {
+  if (isFetching) return;
+  isFetching = true;
+  const dot  = document.getElementById('status-dot');
+  const stxt = document.getElementById('status-text');
+  try {
+    const params = {};
+    const priceMin    = getV('priceMin');
+    const priceMax    = getV('priceMax');
+    const volMin      = getV('volMin');
+    const volMax      = getV('volMax');
+    const dayRangeMin = getV('dayRangeMin');
+    const dayRangeMax = getV('dayRangeMax');
+    const avgRangeMin = getV('avgRangeMin');
+    const avgRangeMax = getV('avgRangeMax');
+    if (priceMin    !== null) params.price_min     = priceMin;
+    if (priceMax    !== null) params.price_max     = priceMax;
+    if (volMin      !== null) params.vol_min       = volMin;
+    if (volMax      !== null) params.vol_max       = volMax;
+    if (dayRangeMin !== null) params.day_range_min = dayRangeMin;
+    if (dayRangeMax !== null) params.day_range_max = dayRangeMax;
+    if (avgRangeMin !== null) params.avg_range_min = avgRangeMin;
+    if (avgRangeMax !== null) params.avg_range_max = avgRangeMax;
+
+    const qs = Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+    const res = await fetch(`/api/boundary-alerts${qs ? '?'+qs : ''}`);
+    if (!res.ok) throw new Error(res.status);
+    const json = await res.json();
+    allData = json.alerts || [];
+    // 预解析时间戳，避免每次渲染/每秒倒计时都重新 new Date() 解析字符串
+    for (const r of allData) {
+      r._anchorMs = new Date(r.anchorTime).getTime();
+      r._expireMs = new Date(r.expireAt).getTime();
+      r._pinnedUntilMs = r.pinnedUntil ? new Date(r.pinnedUntil).getTime() : null;
+    }
+    maxVol  = allData.reduce((m, r) => Math.max(m, Number(r.total_volume)||0), 1);
+
+    if (dot) dot.className = 'status-dot live';
+    if (stxt) stxt.innerHTML = `<span class="status-dot live"></span>实时 · ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;
+
+    applyFilter();
+  } catch(e) {
+    if (dot) dot.className = 'status-dot error';
+    if (stxt) stxt.innerHTML = `<span class="status-dot error"></span>连接失败`;
+    console.error(e);
+  } finally {
+    isFetching = false;
+  }
+}
+
+// ── APPLY FILTER & SORT ───────────────────────────────────────────────────
+function applyFilter() {
+  updateHighlights();
+  // 前端二次筛选（API 已过滤，这里处理实时输入联动）
+  const priceMin    = getV('priceMin');
+  const priceMax    = getV('priceMax');
+  const volMin      = getV('volMin');
+  const volMax      = getV('volMax');
+  const dayRangeMin = getV('dayRangeMin');
+  const dayRangeMax = getV('dayRangeMax');
+  const avgRangeMin = getV('avgRangeMin');
+  const avgRangeMax = getV('avgRangeMax');
+
+  const filtered = allData.filter(row => {
+    if (blockedStocks.includes(row.symbol)) return false;
+    
+    const price    = Number(row.last_price)  || 0;
+    const vol      = Number(row.total_volume) || 0;
+    const dayRange = Number(row.day_range)   || 0;
+    const avgRange = row.avg_range != null ? Number(row.avg_range) : null;
+    if (priceMin    !== null && price    < priceMin)    return false;
+    if (priceMax    !== null && price    > priceMax)    return false;
+    if (volMin      !== null && vol      < volMin)      return false;
+    if (volMax      !== null && vol      > volMax)      return false;
+    if (dayRangeMin !== null && dayRange < dayRangeMin) return false;
+    if (dayRangeMax !== null && dayRange > dayRangeMax) return false;
+    if (avgRangeMin !== null && (avgRange === null || avgRange < avgRangeMin)) return false;
+    if (avgRangeMax !== null && (avgRange === null || avgRange > avgRangeMax)) return false;
+    return true;
+  });
+
+  // 置顶行永远排最前，然后按 sortKey
+  sortedData = [...filtered].sort((a, b) => {
+    if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+    const va = sortKey === 'symbol'
+      ? a[sortKey]
+      : sortKey === 'anchorTime'
+        ? a._anchorMs
+        : sortKey === 'maxA'
+          ? getTouchSortValue(a)
+          : (Number(a[sortKey]) ?? -Infinity);
+    const vb = sortKey === 'symbol'
+      ? b[sortKey]
+      : sortKey === 'anchorTime'
+        ? b._anchorMs
+        : sortKey === 'maxA'
+          ? getTouchSortValue(b)
+          : (Number(b[sortKey]) ?? -Infinity);
+    return va < vb ? sortDir : va > vb ? -sortDir : 0;
+  });
+
+  const pinnedCount = sortedData.filter(r => r.isPinned).length;
+  document.getElementById('count-info').textContent =
+    `预警 ${allData.length} 只 · 显示 ${sortedData.length} 只` +
+    (pinnedCount ? ` · 置顶闪烁 ${pinnedCount} 只` : '');
+
+  renderTable();
+}
+
+// ── RENDER TABLE ──────────────────────────────────────────────────────────
+const rowMap = new Map(); // symbol -> tr，增量维护，避免每次重新扫描 DOM
+
+function renderTable() {
+  const tbody = document.getElementById('tbody');
+  if (sortedData.length === 0) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">暂无预警</td></tr>`;
+    rowMap.clear();
+    return;
+  }
+
+  const now = Date.now();
+  const seen = new Set();
+  let ci = 0;
+  for (const row of sortedData) {
+    const html = buildRowHTML(row, now);
+    let tr = rowMap.get(row.symbol);
+    if (!tr) {
+      tr = document.createElement('tr');
+      tr.dataset.sym = row.symbol;
+      rowMap.set(row.symbol, tr);
+    }
+    if (tr._lastHtml !== html) { tr.innerHTML = html; tr._lastHtml = html; }
+    tr.className = row.isPinned ? 'pinned' : '';
+    if (tbody.children[ci] !== tr) tbody.insertBefore(tr, tbody.children[ci] || null);
+    seen.add(row.symbol);
+    ci++;
+  }
+  while (tbody.children.length > sortedData.length) tbody.removeChild(tbody.lastChild);
+  // 清理已不在数据集中的行，防止 rowMap 无限增长
+  for (const [sym, tr] of rowMap) {
+    if (!seen.has(sym)) rowMap.delete(sym);
+  }
+}
+
+function buildRowHTML(r, now) {
+  const pct  = Number(r.change_pct);
+  const pcls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+  const sign = pct > 0 ? '+' : '';
+  const vol  = Number(r.total_volume) || 0;
+  const vPct = Math.min(100, maxVol > 0 ? vol / maxVol * 100 : 0);
+
+  // 触发类型徽标：4 / 5 / 6↑ 三档纯展示区分，5档不参与升级/置顶判定（那仍由后端 isPinned 决定）
+  const isUpgraded = r.isPinned || (r.triggerType === '4a' && r.maxA >= 6) ||
+                     (r.triggerType === '4b' && r.maxB >= 6);
+  const triggerClass = r.triggerType === '4a'
+    ? (isUpgraded ? 'trigger-4a-up' : 'trigger-4a')
+    : (isUpgraded ? 'trigger-4b-up' : 'trigger-4b');
+  const triggerLabel = r.triggerType === '4a'
+    ? (r.maxA >= 6 ? '6a↑' : r.maxA >= 5 ? '5a' : '4a')
+    : (r.maxB >= 6 ? '6b↑' : r.maxB >= 5 ? '5b' : '4b');
+  const triggerBadge = `<span class="trigger-badge ${triggerClass}">${triggerLabel}</span>`;
+
+  // 置顶徽标
+  let pinBadge = '';
+  if (r.isPinned && r._pinnedUntilMs) {
+    const remainMs  = Math.max(0, r._pinnedUntilMs - now);
+    const remainSec = Math.ceil(remainMs / 1000);
+    const mm = String(Math.floor(remainSec / 60)).padStart(2, '0');
+    const ss = String(remainSec % 60).padStart(2, '0');
+    pinBadge = `<span class="pin-badge">📌 ${mm}:${ss}</span>`;
+  }
+
+  // 倒计时进度条
+  const anchorMs  = r._anchorMs;
+  const expireMs  = r._expireMs;
+  const totalMs   = expireMs - anchorMs;
+  const remainMs2 = Math.max(0, expireMs - now);
+  const pctFill   = totalMs > 0 ? (remainMs2 / totalMs * 100).toFixed(1) : 0;
+  const remainSec2 = Math.ceil(remainMs2 / 1000);
+  const fillCls   = pctFill > 60 ? 'fresh' : pctFill > 30 ? 'mid' : 'ending';
+  const mm2 = String(Math.floor(remainSec2 / 60)).padStart(2, '0');
+  const ss2 = String(remainSec2 % 60).padStart(2, '0');
+  const anchorStr = new Date(anchorMs).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+
+  // 触碰计数胶囊
+  const aHi = r.maxA >= 6;
+  const bHi = r.maxB >= 6;
+  const countHTML = `
+    <div class="count-cell">
+      <span class="cnt cnt-a ${aHi ? 'hi' : ''}">a:${r.maxA}</span>
+      <span class="cnt cnt-b ${bHi ? 'hi' : ''}">b:${r.maxB}</span>
+    </div>`;
+
+  return `
+    <td><div class="symbol-cell"><span class="sym" onclick="lookupAndShow('${r.symbol}')">${r.symbol}</span><button class="btn-block-inline" onclick="blockStock('${r.symbol}')" title="屏蔽此股票">×</button>${triggerBadge}${pinBadge}</div></td>
+    <td class="${pcls}">${fmt(r.last_price, 2)}</td>
+    <td class="${pcls}">${sign}${pct.toFixed(2)}%</td>
+    <td><div class="vol-cell">${fmtVol(vol)}<div class="mini-bar"><div class="mini-bar-fill" style="width:${vPct.toFixed(1)}%"></div></div></div></td>
+    <td style="color:#90caf9;">${fmt(r.day_range, 2)}</td>
+    <td style="color:#90caf9;">${r.avg_range != null ? fmt(r.avg_range, 2) : '—'}</td>
+    <td style="color:#bbb;font-size:12px;">${fmt(r.winHigh,2)} / ${fmt(r.winLow,2)}</td>
+    <td><div class="ab-cell"><span class="ab-a">A ${fmt(r.priceA,2)}</span><span class="ab-b">B ${fmt(r.priceB,2)}</span></div></td>
+    <td>${countHTML}</td>
+    <td style="color:#26a69a;">${fmtVol(r.cycleVol)}</td>
+    <td>
+      <div class="expire-cell">
+        <span class="expire-time">${anchorStr} · ${mm2}:${ss2}</span>
+        <div class="expire-bar"><div class="expire-bar-fill ${fillCls}" style="width:${pctFill}%"></div></div>
+      </div>
+    </td>`;
+}
+
+// ── LIGHTWEIGHT PER-SECOND UPDATE (倒计时进度条) ──────────────────────────
+// 每秒只更新进度条宽度/样式和文字内容，不重新拼接/diff 整行 HTML，
+// 避免每秒对全部数据做一次 buildRowHTML + innerHTML 写入造成的卡顿。
+function updateExpireBars() {
+  const now = Date.now();
+  for (const row of sortedData) {
+    const tr = rowMap.get(row.symbol);
+    if (!tr) continue;
+
+    // 倒计时进度条
+    const totalMs   = row._expireMs - row._anchorMs;
+    const remainMs  = Math.max(0, row._expireMs - now);
+    const pctFill   = totalMs > 0 ? (remainMs / totalMs * 100) : 0;
+    const remainSec = Math.ceil(remainMs / 1000);
+    const mm = String(Math.floor(remainSec / 60)).padStart(2, '0');
+    const ss = String(remainSec % 60).padStart(2, '0');
+    const fillCls = pctFill > 60 ? 'fresh' : pctFill > 30 ? 'mid' : 'ending';
+
+    const fillEl = tr.querySelector('.expire-bar-fill');
+    const timeEl = tr.querySelector('.expire-time');
+    if (fillEl) {
+      fillEl.style.width = pctFill.toFixed(1) + '%';
+      fillEl.className = 'expire-bar-fill ' + fillCls;
+    }
+    if (timeEl) {
+      const anchorStr = new Date(row._anchorMs).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      timeEl.textContent = `${anchorStr} · ${mm}:${ss}`;
+    }
+
+    // 置顶倒计时徽标
+    if (row.isPinned && row._pinnedUntilMs) {
+      const pinEl = tr.querySelector('.pin-badge');
+      if (pinEl) {
+        const remainPinSec = Math.ceil(Math.max(0, row._pinnedUntilMs - now) / 1000);
+        const pmm = String(Math.floor(remainPinSec / 60)).padStart(2, '0');
+        const pss = String(remainPinSec % 60).padStart(2, '0');
+        pinEl.textContent = `📌 ${pmm}:${pss}`;
+      }
+    }
+  }
+}
+
+// ── 代码查询 ──────────────────────────────────────────────────────────────
+function lookupAndShow(sym) {
+  document.getElementById('symbolInput').value = sym;
+  document.getElementById('timeFrom').value    = '';   // 点击表格代码 → 回实时模式
+  document.getElementById('timeTo').value      = '';
+  const hp = document.getElementById('historyPanel');
+  hp.className = 'history-panel';
+  hp.innerHTML = '';
+  checkRealtime(sym);
+  document.getElementById('lookupResult').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function clearLookup() {
+  document.getElementById('symbolInput').value = '';
+  document.getElementById('timeFrom').value    = '';
+  document.getElementById('timeTo').value      = '';
+  document.getElementById('lookupResult').className = 'lookup-result';
+  document.getElementById('lookupResult').innerHTML = '';
+  document.getElementById('historyPanel').className = 'history-panel';
+  document.getElementById('historyPanel').innerHTML = '';
+}
+
+// 统一入口：有时间 → 历史快照诊断，无时间 → 实时查询
+function handleLookup() {
+  const sym  = document.getElementById('symbolInput').value.trim().toUpperCase();
+  const from = document.getElementById('timeFrom').value.trim();
+  const to   = document.getElementById('timeTo').value.trim();
+  if (!sym) { alert('请输入股票代码'); return; }
+  if (from || to) {
+    diagnoseSymbol();
+  } else {
+    checkRealtime(sym);
+  }
+}
+
+// 实时查询：调用轻量后端API（不查库，window10m/window30m实时计算）
+async function checkRealtime(sym) {
+  const el = document.getElementById('lookupResult');
+  el.className = 'lookup-result show';
+  document.getElementById('historyPanel').className = 'history-panel';
+  document.getElementById('historyPanel').innerHTML = '';
+  el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} 实时状态中…</div>`;
+  try {
+    const res  = await fetch(`/api/boundary-alerts/check?symbol=${encodeURIComponent(sym)}`);
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    renderLookupResult(sym, null, data);
+  } catch (e) {
+    el.innerHTML = `<div style="color:#ef5350;font-size:13px;">查询失败：${e.message}</div>`;
+  }
+}
+
+async function diagnoseSymbol() {
+  const sym  = document.getElementById('symbolInput').value.trim().toUpperCase();
+  const from = document.getElementById('timeFrom').value.trim();
+  const to   = document.getElementById('timeTo').value.trim();
+  if (!sym) { alert('请输入股票代码'); return; }
+
+  const timeRe = /^\d{2}:\d{2}$/;
+  if (from && !timeRe.test(from)) { alert('开始时间格式错误，请输入 HH:MM'); return; }
+  if (to   && !timeRe.test(to))   { alert('结束时间格式错误，请输入 HH:MM'); return; }
+
+  const el = document.getElementById('lookupResult');
+  el.className = 'lookup-result show';
+  document.getElementById('historyPanel').className = 'history-panel';
+  document.getElementById('historyPanel').innerHTML = '';
+
+  // 只填了一个时间 → 单点查询；两个都填 → 范围查询
+  const isSingle = (from && !to) || (!from && to);
+  const singleTime = from || to;
+
+  if (isSingle) {
+    el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} @ ${singleTime} 快照中…</div>`;
+    try {
+      const res  = await fetch(`/api/boundary-alerts/diagnose?symbol=${encodeURIComponent(sym)}&time=${encodeURIComponent(singleTime)}`);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      renderLookupResult(sym, singleTime, data);
+    } catch(e) {
+      el.innerHTML = `<div style="color:#ef5350;font-size:13px;">查询失败：${e.message}</div>`;
+    }
+  } else {
+    el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} ${from}–${to} 快照中…</div>`;
+    try {
+      const res  = await fetch(`/api/boundary-alerts/diagnose-range?symbol=${encodeURIComponent(sym)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      renderDiagnoseRange(sym, data);
+    } catch(e) {
+      el.innerHTML = `<div style="color:#ef5350;font-size:13px;">查询失败：${e.message}</div>`;
+    }
+  }
+}
+
+// 渲染单点结果（实时 或 历史单分钟），data 结构与后端 buildBoundaryRuleCards 输出一致
+function renderLookupResult(sym, time, data) {
+  const el = document.getElementById('lookupResult');
+  const isRealtime = !time; // 无 time 参数 = 实时查询，inRankingCache 字段才有意义
+
+  if (!data.found) {
+    const rcInfo = (isRealtime && data.inRankingCache !== undefined)
+      ? `<div style="margin-top:6px;font-size:12px;${data.inRankingCache ? 'color:#26a69a;' : 'color:#ef5350;'}">
+          ${data.inRankingCache ? '✓ 在 rankingCache 中（有行情，但无10分钟K线数据）' : '✗ 不在 rankingCache 中（不在当前监控的股票池里，不会被扫描）'}
+        </div>`
+      : '';
+    el.innerHTML = `<div style="color:#888;font-size:13px;">
+      <b style="color:#fff">${sym}</b>${time ? ` 在 <b style="color:#fff">${time}</b>` : ''}
+      ${data.failReason || '暂无数据（10分钟内无交易记录，或快照尚未写入）'}
+      ${rcInfo}
+    </div>`;
+    return;
+  }
+  const price = data.last_price;
+  const pct   = data.change_pct != null ? Number(data.change_pct) : null;
+  const pcls  = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+  const sign  = pct > 0 ? '+' : '';
+  const statusLabel = data.triggered
+    ? `<span class="pass-all">✓ 满足触发条件</span>`
+    : `<span class="fail-some">✗ 未触发</span>`;
+  const timeInfo = time
+    ? `<span style="color:#555;font-size:11px;margin-left:10px;">@ ${time} · ${data.bars_count ?? '—'} 根K线</span>`
+    : `<span style="color:#555;font-size:11px;margin-left:10px;">实时 · ${data.bars_count ?? '—'} 根K线</span>`;
+
+  const rcLabel = (isRealtime && data.inRankingCache !== undefined)
+    ? (data.inRankingCache
+        ? `<span style="color:#26a69a;font-size:11px;margin-left:10px;">✓ 在rankingCache中</span>`
+        : `<span style="color:#ef5350;font-size:11px;margin-left:10px;">✗ 不在rankingCache中（不会被扫描）</span>`)
+    : '';
+
+  const reasonHTML = data.triggered
+    ? `<div class="pass-reason-banner">✓ 已满足全部条件${data.triggerType ? `（触发类型 ${data.triggerType}）` : ''}</div>`
+    : (data.failReason ? `<div class="fail-reason-banner">✗ 未触发原因：${data.failReason}</div>` : '');
+
+  el.className = 'lookup-result show';
+  el.innerHTML = `
+    <div class="lookup-sym" style="margin-bottom:6px;">
+      ${sym}
+      ${price != null ? `<span class="${pcls}">${fmt(price,2)}  ${sign}${pct.toFixed(2)}%</span>` : ''}
+      ${statusLabel}
+      ${timeInfo}
+      ${rcLabel}
+    </div>
+    <div class="rule-detail-grid">${buildRuleCards(data.rules)}</div>
+    ${reasonHTML}`;
+}
+
+function renderDiagnoseRange(sym, data) {
+  const el = document.getElementById('lookupResult');
+  if (data.count === 0) {
+    el.innerHTML = `<div style="color:#888;font-size:13px;">
+      <b style="color:#fff">${sym}</b> 在 ${data.from.slice(0,5)}–${data.to.slice(0,5)} 内暂无快照数据
+    </div>`;
+    return;
+  }
+
+  const triggeredCount = data.records.filter(r => r.triggered).length;
+
+  const rows = data.records.map(rec => {
+    const timeStr = rec.snap_time.slice(0, 5);
+    const ruleCells = rec.rules.map(r => {
+      let valStr;
+      if (r.value === null)      valStr = '—';
+      else if (r.id === 'touch') valStr = `a${r.value.a}/b${r.value.b}`;
+      else                       valStr = Number(r.value).toFixed(3);
+
+      const color = r.pass === null ? '#555' : r.pass ? '#26a69a' : '#ef5350';
+      return `<td style="padding:6px 8px;text-align:right;color:${color};font-size:12px;white-space:nowrap;">${valStr}</td>`;
+    }).join('');
+
+    const statusColor = rec.triggered ? '#26a69a' : '#ef5350';
+    const statusText  = rec.triggered ? '✓' : '✗';
+
+    return `<tr style="border-bottom:1px solid #2e2e2e;">
+      <td style="padding:6px 10px;color:#aaa;font-size:12px;white-space:nowrap;">${timeStr}</td>
+      <td style="padding:6px 8px;text-align:center;">
+        <span style="color:${statusColor};font-size:12px;font-weight:bold;">${statusText}</span>
+      </td>
+      ${ruleCells}
+      <td style="padding:6px 8px;color:#888;font-size:11px;max-width:220px;white-space:normal;">${rec.failReason || ''}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="margin-bottom:8px;font-size:12px;color:#888;">
+      <b style="color:#fff;font-size:14px;">${sym}</b>
+      <span style="margin-left:10px;">${data.from.slice(0,5)} — ${data.to.slice(0,5)}</span>
+      <span style="margin-left:10px;">${data.count} 个时间点</span>
+      <span style="margin-left:10px;color:#26a69a;">${triggeredCount} 个满足触发条件</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse;background:#252525;border-radius:6px;overflow:hidden;font-size:13px;">
+      <thead><tr style="background:#333;">
+        <th style="padding:6px 10px;text-align:left;color:#aaa;font-weight:600;font-size:11px;">时间</th>
+        <th style="padding:6px 8px;text-align:center;color:#aaa;font-weight:600;font-size:11px;">结果</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;">振幅</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;">0.15约束</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;">周期量</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;">触碰</th>
+        <th style="padding:6px 8px;text-align:right;color:#aaa;font-weight:600;font-size:11px;">突破轨道</th>
+        <th style="padding:6px 8px;text-align:left;color:#aaa;font-weight:600;font-size:11px;">原因</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function buildRuleCards(rules) {
+  return rules.map(r => {
+    const cls  = r.pass === null ? 'na' : r.pass ? 'pass' : 'fail';
+    const icon = r.pass === null ? '' : r.pass ? '✓ ' : '✗ ';
+    let valueStr;
+    if (r.value === null)      valueStr = '—';
+    else if (r.id === 'touch') valueStr = `a=${r.value.a} / b=${r.value.b}`;
+    else                       valueStr = `${Number(r.value).toFixed(4)}${r.unit}`;
+    return `<div class="rule-card ${cls}">
+      <div class="rule-card-title">${r.label}</div>
+      <div class="rule-card-value">${icon}${valueStr}</div>
+      <div class="rule-card-threshold">阈值 ${r.threshold}</div>
+    </div>`;
+  }).join('');
+}
+
+async function lookupHistory() {
+  const sym = document.getElementById('symbolInput').value.trim().toUpperCase();
+  if (!sym) { alert('请先输入股票代码'); return; }
+  const panel = document.getElementById('historyPanel');
+  panel.className = 'history-panel show';
+  panel.innerHTML = `<div class="history-empty">正在查询 ${sym} 今日时间点…</div>`;
+  try {
+    const res  = await fetch(`/api/boundary-alerts/history?symbol=${encodeURIComponent(sym)}`);
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    renderHistory(sym, data);
+  } catch(e) {
+    panel.innerHTML = `<div class="history-empty" style="color:#ef5350;">查询失败：${e.message}</div>`;
+  }
+}
+
+function renderHistory(sym, data) {
+  const panel   = document.getElementById('historyPanel');
+  const records = data.records || [];
+  if (records.length === 0) {
+    panel.innerHTML = `
+      <div class="history-header"><strong>${sym}</strong><span>今日历史时间点</span></div>
+      <div class="history-empty">今日暂无满足触发条件的时间点</div>`;
+    return;
+  }
+  const latestTime = records[records.length - 1].time;
+  const items = [...records].reverse().map(rec => {
+    const isCurrent = rec.time === latestTime;
+    const pct  = Number(rec.change_pct);
+    const sign = pct > 0 ? '+' : '';
+    const pcls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+    const vals = [
+      { label: '类型', v: rec.triggerType || '—' },
+      { label: '触碰', v: (rec.touchA != null) ? `a${rec.touchA}/b${rec.touchB}` : '—' },
+      { label: 'A价',  v: rec.priceA != null ? fmt(rec.priceA, 3) : '—' },
+      { label: 'B价',  v: rec.priceB != null ? fmt(rec.priceB, 3) : '—' },
+      { label: '窗口高/低', v: (rec.winHigh != null) ? `${fmt(rec.winHigh,2)}/${fmt(rec.winLow,2)}` : '—' },
+    ].map(x => `<div class="tl-val-item">${x.label} <span>${x.v}</span></div>`).join('');
+    const priceStr = rec.last_price != null
+      ? `<span class="${pcls}" style="margin-left:6px;font-size:11px;">${fmt(rec.last_price,2)} ${sign}${pct.toFixed(2)}%</span>` : '';
+    return `<div class="tl-item">
+      <div class="tl-time">${rec.time.slice(0,5)}</div>
+      <div class="tl-dot${isCurrent ? ' current' : ''}"></div>
+      <div class="tl-body">
+        <div class="tl-label${isCurrent ? ' current' : ''}">${isCurrent ? '● 最新' : '✓ 触发'}${priceStr}</div>
+        <div class="tl-vals">${vals}</div>
+      </div>
+    </div>`;
+  }).join('');
+  panel.innerHTML = `
+    <div class="history-header">
+      <strong>${sym}</strong>
+      <span>今日共 <b style="color:#26a69a">${records.length}</b> 个满足触发条件的时间点</span>
+    </div>
+    <div class="timeline">${items}</div>`;
+}
+
+// ── UTILS ─────────────────────────────────────────────────────────────────
+function fmt(v, dec) {
+  const n = Number(v);
+  return isNaN(n) ? '—' : n.toFixed(dec);
+}
+function fmtVol(v) {
+  return v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(1)+'K' : String(Math.round(v));
+}
+
+// ── COUNTDOWN & AUTO REFRESH ──────────────────────────────────────────────
+setInterval(() => {
+  if (countdown <= 0) {
+    fetchData();
+    countdown = 10;
+  } else {
+    countdown--;
+    // 每秒只做轻量级 DOM 更新（进度条宽度/文本），不重新渲染整表
+    updateExpireBars();
+  }
+  document.getElementById('refresh-timer').textContent = `${countdown}s 后刷新`;
+}, 1000);
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) { fetchData(); countdown = 10; }
+});
+
+FILTER_IDS.forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('input', () => applyFilter());
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') applyFilter(); });
+});
+
+const blockInputEl = document.getElementById('blockInput');
+if (blockInputEl) {
+  blockInputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addBlocked();
+    }
+  });
+}
+
+const manualBlockInputEl = document.getElementById('manual-block-input');
+if (manualBlockInputEl) {
+  manualBlockInputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addManualBlock();
+    }
+  });
+}
+
+// ── 右键菜单：屏蔽此股票 ──────────────────────────────────────────────────
+let ctxTarget = null;
+const ctxMenu = document.getElementById('ctx-menu');
+
+document.getElementById('tbody').addEventListener('contextmenu', e => {
+  const tr = e.target.closest('tr[data-sym]');
+  if (!tr) return;
+  e.preventDefault();
+  ctxTarget = tr.dataset.sym;
+
+  document.getElementById('ctx-block').textContent = `🚫 屏蔽 ${ctxTarget}`;
+  ctxMenu.style.display = 'block';
+  const x = Math.min(e.clientX, window.innerWidth  - ctxMenu.offsetWidth  - 4);
+  const y = Math.min(e.clientY, window.innerHeight - ctxMenu.offsetHeight - 4);
+  ctxMenu.style.left = x + 'px';
+  ctxMenu.style.top  = y + 'px';
+});
+
+document.getElementById('ctx-block').addEventListener('click', () => {
+  if (ctxTarget) blockStock(ctxTarget);
+  ctxMenu.style.display = 'none';
+});
+
+document.addEventListener('click', () => { ctxMenu.style.display = 'none'; });
+document.addEventListener('contextmenu', e => {
+  if (!e.target.closest('#tbody')) ctxMenu.style.display = 'none';
+});
+
+saveBlocked();
+fetchData();
+</script>
+</body>
+</html>

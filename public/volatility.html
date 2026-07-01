@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>波动率监控</title>
+<style>
+/* ── 基础 ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0d1117; color: #c9d1d9;
+  font-family: 'Segoe UI', 'Consolas', monospace;
+  font-size: 13px; min-height: 100vh;
+}
+a { color: #58a6ff; text-decoration: none; }
+
+/* ── 顶部导航 ── */
+.nav {
+  background: #161b22; border-bottom: 1px solid #30363d;
+  padding: 0 16px; display: flex; align-items: center; gap: 20px; height: 44px;
+}
+.nav-title { color: #e6edf3; font-weight: 600; font-size: 15px; }
+.nav a { color: #8b949e; font-size: 12px; padding: 4px 8px; border-radius: 4px; }
+.nav a:hover { color: #e6edf3; background: #21262d; }
+
+/* ── 控制栏 ── */
+.ctrl-bar {
+  background: #161b22; border-bottom: 1px solid #30363d;
+  padding: 8px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+}
+.ctrl-bar label { color: #8b949e; font-size: 12px; }
+.ctrl-bar input, .ctrl-bar select {
+  background: #0d1117; border: 1px solid #30363d; border-radius: 4px;
+  color: #c9d1d9; padding: 4px 8px; font-size: 12px; outline: none;
+}
+.ctrl-bar input:focus, .ctrl-bar select:focus { border-color: #58a6ff; }
+.btn {
+  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+  color: #c9d1d9; padding: 4px 12px; font-size: 12px; cursor: pointer;
+}
+.btn:hover { background: #30363d; }
+.btn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+#status-bar { margin-left: auto; color: #8b949e; font-size: 11px; }
+
+/* ── 数据源 Tab 栏 ── */
+.tab-bar {
+  background: #161b22; border-bottom: 1px solid #30363d;
+  padding: 0 16px; display: flex; align-items: stretch; height: 38px; gap: 2px;
+}
+.tab-bar .tab {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 18px;
+  color: #8b949e; cursor: pointer;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  user-select: none;
+  transition: color 0.1s, background 0.1s, border-color 0.1s;
+}
+.tab-bar .tab:hover { color: #c9d1d9; background: #1c2128; }
+.tab-bar .tab.active {
+  color: #e6edf3; border-bottom-color: #58a6ff;
+  background: #0d1117;
+  font-weight: 600;
+}
+.tab-bar .tab .tab-desc {
+  color: #6e7681; font-size: 11px; font-weight: normal;
+}
+.tab-bar .tab.active .tab-desc { color: #8b949e; }
+
+/* ── 矩阵容器:占满剩余空间,横向+纵向滚动 ── */
+.matrix-wrap {
+  height: calc(100vh - 44px - 38px - 42px);   /* nav + tab-bar + ctrl-bar */
+  overflow: auto;
+  background: #0d1117;
+}
+
+/* ── 矩阵表格 ── */
+table.matrix {
+  border-collapse: separate;     /* 用 separate 才能正确处理 sticky 边框 */
+  border-spacing: 0;
+  font-family: 'Consolas', 'Menlo', monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 表头:整行固定在顶部 */
+table.matrix thead th {
+  position: sticky; top: 0; z-index: 3;
+  background: #161b22; color: #8b949e;
+  padding: 4px 6px;
+  border-bottom: 1px solid #30363d;
+  border-right: 1px solid #21262d;
+  font-weight: 600; text-align: center;
+  min-width: 48px;
+}
+
+/* 表头第一列(symbol):同时固定在左上角,z 要更高 */
+table.matrix thead th.col-sym {
+  left: 0; z-index: 4;
+  background: #161b22;
+  text-align: left; padding-left: 12px;
+  min-width: 110px;
+  border-right: 1px solid #30363d;
+}
+
+/* 数据行 symbol 列:固定在左侧 */
+table.matrix tbody td.col-sym {
+  position: sticky; left: 0; z-index: 2;
+  background: #0d1117;
+  color: #e6edf3; font-weight: 600;
+  padding: 4px 12px;
+  border-right: 1px solid #30363d;
+  border-bottom: 1px solid #161b22;
+}
+
+table.matrix tbody td {
+  padding: 4px 6px;
+  border-right: 1px solid #161b22;
+  border-bottom: 1px solid #161b22;
+  text-align: right;
+  color: #c9d1d9;
+}
+
+table.matrix tbody tr:hover td { background: #161b22; }
+table.matrix tbody tr:hover td.col-sym { background: #1c2333; }
+
+/* σ 数值的色阶:跟原页面保持一致(sigma 模式) */
+.s0 { color: #484f58; }                       /* sigma=0 */
+.s1 { color: #c9d1d9; }                       /* 0 < s < 0.5 */
+.s2 { color: #58a6ff; }                       /* 0.5 <= s < 1 */
+.s3 { color: #e3b341; font-weight: 600; }     /* 1 <= s < 2 */
+.s4 { color: #f85149; font-weight: 700; }     /* s >= 2 */
+
+/* 收益率 r 的双向色阶(return 模式):正涨绿,负跌红,按 |r| 分深浅 */
+.r0    { color: #484f58; }                       /* r=0 */
+.r-up1 { color: #56d364; }                       /* 0 < r < 0.3 */
+.r-up2 { color: #3fb950; font-weight: 600; }     /* 0.3 <= r < 1 */
+.r-up3 { color: #2ea043; font-weight: 700;
+         background: rgba(63,185,80,0.08); }     /* r >= 1 */
+.r-dn1 { color: #ff7b72; }                       /* -0.3 < r < 0 */
+.r-dn2 { color: #f85149; font-weight: 600; }     /* -1 < r <= -0.3 */
+.r-dn3 { color: #da3633; font-weight: 700;
+         background: rgba(248,81,73,0.10); }     /* r <= -1 */
+
+/* 小时边界:列右侧加亮一条线,方便扫读 */
+table.matrix th.hour-end,
+table.matrix td.hour-end { border-right: 1px solid #30363d; }
+
+/* 空态 */
+.empty { padding: 60px; text-align: center; color: #484f58; font-size: 13px; }
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: #30363d; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #484f58; }
+</style>
+</head>
+<body>
+
+<!-- 导航 -->
+<nav class="nav">
+  <span class="nav-title">📊 波动率监控</span>
+  <a href="/ranking">涨跌排名</a>
+  <a href="/l2-alerts">大单历史</a>
+  <a href="/screener">筛选器</a>
+  <a href="/volatility" style="color:#e6edf3;background:#21262d">波动率</a>
+  <a href="/boundary-alerts">边界预警</a>
+  <a href="/active-trading">活跃主买</a>
+  <a href="/abnormal-trades">异常成交</a>
+  <a href="/active-trading">活跃主买</a>
+</nav>
+
+<!-- 数据源 Tab:5分钟周期(volatility_cycles) / 每分钟滑动(volatility_cycles_sliding) -->
+<div class="tab-bar">
+  <div class="tab active" data-table="cycles" onclick="switchTab('cycles')">
+    <span>5 分钟周期</span>
+    <span class="tab-desc">不重叠窗口 · 每 5 分钟一条</span>
+  </div>
+  <div class="tab" data-table="sliding" onclick="switchTab('sliding')">
+    <span>每分钟滑动</span>
+    <span class="tab-desc">滑动窗口 · 每分钟一条</span>
+  </div>
+</div>
+
+<!-- 控制栏 -->
+<div class="ctrl-bar">
+  <label>日期</label>
+  <input type="date" id="inp-date">
+
+  <label>最小σ%</label>
+  <input type="number" id="inp-minsigma" value="0" min="0" step="0.1" style="width:64px">
+
+  <label>时段</label>
+  <input type="time" id="inp-from" value="08:05" step="60" style="width:88px">
+  <span style="color:#484f58">~</span>
+  <input type="time" id="inp-to"   value="15:25" step="60" style="width:88px">
+
+  <label>条数</label>
+  <input type="number" id="inp-limit" value="300" min="10" max="1000" step="10" style="width:72px">
+
+  <label style="margin-left:6px">指标</label>
+  <select id="sel-metric" onchange="fetchMatrix()" style="width:120px">
+    <option value="sigma">σ%(5分钟)</option>
+    <option value="return">收益率 r%(每分钟)</option>
+  </select>
+
+  <button class="btn" id="btn-refresh" onclick="fetchMatrix()">刷新</button>
+  <button class="btn" id="btn-auto" onclick="toggleAuto()">自动刷新</button>
+  <button class="btn" id="btn-export" onclick="exportMatrix()">导出CSV</button>
+
+  <label style="margin-left:8px">
+    <input type="checkbox" id="chk-hide-zero" onchange="fetchMatrix()"> 隐藏0值
+  </label>
+
+  <span id="status-bar">—</span>
+</div>
+
+<!-- 矩阵主体 -->
+<div class="matrix-wrap" id="matrix-wrap">
+  <div class="empty" id="empty-msg">加载中...</div>
+</div>
+
+<script>
+// ── 状态 ──
+let _autoTimer    = null;
+let _lastData     = null;   // 缓存最近一次成功渲染的数据,导出按钮直接用
+let _currentTable = 'cycles';  // 当前激活的数据源 Tab:'cycles' | 'sliding'
+
+// ── Tab 切换 ──
+function switchTab(table) {
+  if (table === _currentTable) return;
+  _currentTable = table;
+  document.querySelectorAll('.tab-bar .tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.table === table);
+  });
+  fetchMatrix();
+}
+
+// ── 初始化 ──
+document.getElementById('inp-date').value = todayStr();
+fetchMatrix();
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// ── 拉数据并渲染 ──
+async function fetchMatrix() {
+  const date     = document.getElementById('inp-date').value || todayStr();
+  const minSigma = document.getElementById('inp-minsigma').value || 0;
+  const from     = document.getElementById('inp-from').value || '08:05';
+  const to       = document.getElementById('inp-to').value   || '15:25';
+  const limit    = document.getElementById('inp-limit').value || 300;
+  const metric   = document.getElementById('sel-metric').value || 'sigma';
+  const hideZero = document.getElementById('chk-hide-zero').checked;
+  const table    = _currentTable;
+
+  setStatus('加载中...');
+  try {
+    const url = `/api/volatility/matrix?date=${date}&min_sigma=${minSigma}`
+              + `&from=${from}&to=${to}&limit=${limit}&metric=${metric}&table=${table}`;
+    const r    = await fetch(url);
+    const data = await r.json();
+    _lastData = data;
+    renderMatrix(data, { hideZero });
+    // 状态栏:数据源 + 指标 + 维度
+    const tableLabel  = data.table  === 'sliding' ? '每分钟滑动' : '5分钟周期';
+    const metricLabel = data.metric === 'return'
+      ? (data.table === 'sliding' ? 'r%(每分钟)' : 'r%(展开5格)')
+      : (data.table === 'sliding' ? 'σ%(每分钟)' : 'σ%(每5分钟)');
+    setStatus(`${tableLabel} · ${metricLabel}  ${data.rows.length}只 × ${data.times.length}分钟  ${new Date().toLocaleTimeString()}`);
+  } catch (e) {
+    setStatus('加载失败: ' + e.message);
+    console.error(e);
+  }
+}
+
+// ── 渲染矩阵 ──
+function renderMatrix(data, opts) {
+  const wrap = document.getElementById('matrix-wrap');
+  const { times, rows, metric } = data || { times: [], rows: [], metric: 'sigma' };
+
+  if (!rows.length || !times.length) {
+    wrap.innerHTML = '<div class="empty">当日暂无符合条件的波动率记录</div>';
+    return;
+  }
+
+  const HIDE_ZERO = opts && opts.hideZero;
+  const isReturn  = metric === 'return';
+  const cellClass = isReturn ? returnClass : sigmaClass;
+  const fmt = isReturn
+    ? (v) => (v > 0 ? '+' : '') + v.toFixed(4)   // r 带正负号,便于一眼分辨方向
+    : (v) => v.toFixed(4);
+
+  // 表头
+  let thead = '<thead><tr>';
+  thead += '<th class="col-sym">symbol</th>';
+  times.forEach((t) => {
+    const isHourEnd = t.endsWith(':59');
+    thead += `<th class="${isHourEnd ? 'hour-end' : ''}">${t}</th>`;
+  });
+  thead += '</tr></thead>';
+
+  // 表体
+  let tbody = '<tbody>';
+  for (const row of rows) {
+    tbody += `<tr><td class="col-sym">${row.symbol}</td>`;
+    for (const t of times) {
+      const v = row.values[t];
+      if (v === undefined) { tbody += '<td></td>'; continue; }
+      if (HIDE_ZERO && v === 0) { tbody += '<td></td>'; continue; }
+      const cls = cellClass(v);
+      const isHourEnd = t.endsWith(':59');
+      tbody += `<td class="${cls}${isHourEnd ? ' hour-end' : ''}">${fmt(v)}</td>`;
+    }
+    tbody += '</tr>';
+  }
+  tbody += '</tbody>';
+
+  wrap.innerHTML = `<table class="matrix">${thead}${tbody}</table>`;
+}
+
+// σ 单向色阶(sigma 模式)
+function sigmaClass(v) {
+  if (v === 0)   return 's0';
+  if (v < 0.5)   return 's1';
+  if (v < 1)     return 's2';
+  if (v < 2)     return 's3';
+  return 's4';
+}
+
+// r 双向色阶(return 模式):正涨绿,负跌红,按 |r| 分深浅
+function returnClass(v) {
+  if (v === 0) return 'r0';
+  const a = Math.abs(v);
+  const up = v > 0;
+  if (a < 0.3) return up ? 'r-up1' : 'r-dn1';
+  if (a < 1)   return up ? 'r-up2' : 'r-dn2';
+  return up ? 'r-up3' : 'r-dn3';
+}
+
+// ── 导出 CSV ──
+// 严格跟随当前显示:遵守"隐藏σ=0"勾选状态,文件名带日期和当前时刻便于区分。
+// CSV 加 UTF-8 BOM,Excel 双击打开不会出中文乱码(虽然这里多是英文代码)。
+function exportMatrix() {
+  if (!_lastData || !_lastData.rows.length) {
+    setStatus('暂无数据可导出,先点"刷新"');
+    return;
+  }
+  const { times, rows, metric } = _lastData;
+  const hideZero = document.getElementById('chk-hide-zero').checked;
+  const dateStr  = document.getElementById('inp-date').value || todayStr();
+  const isReturn = metric === 'return';
+  const fmt = isReturn
+    ? (v) => (v > 0 ? '+' : '') + v.toFixed(4)
+    : (v) => v.toFixed(4);
+
+  // CSV 字段里若含逗号/引号/换行需要加引号转义。symbol/数字基本不会触发,
+  // 这里仍走标准转义,后续如果加入备注列也能直接复用。
+  const esc = (s) => {
+    const v = String(s);
+    return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  };
+
+  const lines = [];
+  lines.push(['symbol', ...times].map(esc).join(','));
+  for (const row of rows) {
+    const cells = [row.symbol];
+    for (const t of times) {
+      const v = row.values[t];
+      if (v === undefined || (hideZero && v === 0)) {
+        cells.push('');
+      } else {
+        cells.push(fmt(v));
+      }
+    }
+    lines.push(cells.map(esc).join(','));
+  }
+
+  const bom  = '\uFEFF';
+  const blob = new Blob([bom + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const ts   = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+  const tableTag  = (_lastData.table === 'sliding') ? 'sliding' : 'cycles';
+  const metricTag = isReturn ? 'return' : 'sigma';
+  const name = `volatility_${tableTag}_${metricTag}_${dateStr}_${ts}.csv`;
+
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+
+  setStatus(`已导出 ${name} (${rows.length}行 × ${times.length}列)`);
+}
+
+// ── 自动刷新 ──
+function toggleAuto() {
+  const btn = document.getElementById('btn-auto');
+  if (_autoTimer) {
+    clearInterval(_autoTimer);
+    _autoTimer = null;
+    btn.classList.remove('active');
+    btn.textContent = '自动刷新';
+  } else {
+    _autoTimer = setInterval(fetchMatrix, 10000);
+    btn.classList.add('active');
+    btn.textContent = '停止自动';
+  }
+}
+
+// ── 工具 ──
+function setStatus(msg) {
+  document.getElementById('status-bar').textContent = msg;
+}
+</script>
+</body>
+</html>
