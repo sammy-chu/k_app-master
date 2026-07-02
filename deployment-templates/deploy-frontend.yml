@@ -1,33 +1,34 @@
 # .github/workflows/deploy-frontend.yml
 # GitHub Actions 自动化部署配置文件
 
-name: Deploy Frontend to Cloud Server
+name: Deploy Frontend
 
 on:
   push:
-    branches: [production-only]
-  # 仅当 public 目录有变更时触发
-  paths: ['public/**']
+    branches:
+      - production-only
+    paths:
+      - 'public/**'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
-      # (可选) 如果你不想在 Nginx 使用 sub_filter，可以在这里直接注入 API_BASE
-      # - name: Inject API_BASE to HTML
-      #   run: |
-      #     find public -name "*.html" -exec sed -i 's|<head>|<head><script>window.API_BASE="https://api.yourdomain.com";</script>|g' {} +
-
-      - name: Deploy public/ to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          # 在 GitHub 仓库的 Settings -> Secrets and variables -> Actions 中配置这些变量
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          source: "public/"
-          target: "/var/www/k-app/" # 注意末尾的斜杠
-          strip_components: 1 # 根据你的实际目录结构决定是否要剥离顶层目录
+      
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+      
+      - name: Deploy via SCP
+        run: |
+          scp -r ./public/* ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/k-app/public/
+      
+      - name: Reload Nginx
+        run: |
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "systemctl reload nginx"
