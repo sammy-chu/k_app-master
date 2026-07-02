@@ -3242,6 +3242,8 @@ app.get('/api/volume/summary', async (req, res) => {
   const end = String(req.query.end || '').trim();
   const order = String(req.query.order || 'total').trim();
   const format = String(req.query.format || 'json').trim();
+  const limit = parseInt(req.query.limit, 10) || 0;
+  const minVolume = parseFloat(req.query.min_volume) || 0;
 
   if (!isValidDate(start) || !isValidDate(end)) {
     return res.status(400).json({ error: 'invalid_date_format' });
@@ -3249,16 +3251,23 @@ app.get('/api/volume/summary', async (req, res) => {
 
   const orderBy = order === 'avg' ? 'avg_volume' : 'total_volume';
 
-  const sql = `
+  let sql = `
     SELECT symbol,
            SUM(daily_volume) AS total_volume,
            ROUND(AVG(daily_volume), 2) AS avg_volume
     FROM tos_daily_volume
     WHERE trade_date >= $1::date AND trade_date <= $2::date
     GROUP BY symbol
-    ORDER BY ${orderBy} DESC;`;
+    HAVING SUM(daily_volume) >= $3
+    ORDER BY ${orderBy} DESC`;
+  const params = [start, end, minVolume];
+  if (limit > 0) {
+    sql += ` LIMIT $${params.length + 1}`;
+    params.push(limit);
+  }
+  sql += ';';
 
-  const { rows } = await pool.query(sql, [start, end]);
+  const { rows } = await pool.query(sql, params);
 
   if (format === 'csv') {
     res.setHeader('Content-Type', 'text/csv');
@@ -3304,6 +3313,46 @@ app.get('/api/volume/cumulative', async (req, res) => {
 
   const { rows } = await pool.query(sql, [symbol, date]);
   res.json(rows[0]);
+});
+
+app.get('/api/volume/daily-series', async (req, res) => {
+  const symbol = String(req.query.symbol || '').trim();
+  const start = String(req.query.start || '').trim();
+  const end = String(req.query.end || '').trim();
+
+  if (!symbol || !isValidDate(start) || !isValidDate(end)) {
+    return res.status(400).json({ error: 'invalid_params' });
+  }
+
+  const sql = `
+    SELECT trade_date::text AS trade_date, total_volume
+    FROM daily_summary
+    WHERE symbol = $1 AND trade_date BETWEEN $2::date AND $3::date
+    ORDER BY trade_date ASC`;
+
+  const { rows } = await pool.query(sql, [symbol, start, end]);
+  res.json(rows);
+});
+
+app.get('/api/volume/market-daily', async (req, res) => {
+  const start = String(req.query.start || '').trim();
+  const end = String(req.query.end || '').trim();
+
+  if (!isValidDate(start) || !isValidDate(end)) {
+    return res.status(400).json({ error: 'invalid_params' });
+  }
+
+  const sql = `
+    SELECT trade_date::text AS trade_date,
+           SUM(total_volume)::numeric AS total_volume,
+           COUNT(DISTINCT symbol)::int AS stock_count
+    FROM daily_summary
+    WHERE trade_date BETWEEN $1::date AND $2::date
+    GROUP BY trade_date
+    ORDER BY trade_date ASC`;
+
+  const { rows } = await pool.query(sql, [start, end]);
+  res.json(rows);
 });
 
 app.post('/api/alerts/daily-volume-pct/scan', async (req, res) => {
@@ -4161,6 +4210,7 @@ app.get('/boundary-alerts',     (req, res) => res.sendFile(path.join(__dirname, 
 app.get('/volatility',          (req, res) => res.sendFile(path.join(__dirname, '../public/volatility.html')));
 app.get('/active-trading',      (req, res) => res.sendFile(path.join(__dirname, '../public/active-trading.html')));
 app.get('/abnormal-trades',     (req, res) => res.sendFile(path.join(__dirname, '../public/abnormal-trades.html')));
+app.get('/volume-chart',        (req, res) => res.sendFile(path.join(__dirname, '../public/volume-chart.html')));
 
 ensureTables().then(() => {
   startAlertMonitor();
