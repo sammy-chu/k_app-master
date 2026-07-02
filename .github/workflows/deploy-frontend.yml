@@ -1,7 +1,4 @@
-# .github/workflows/deploy-frontend.yml
-# GitHub Actions 自动化部署配置文件
-
-name: Deploy Frontend to Cloud Server
+name: Deploy Frontend
 
 on:
   push:
@@ -9,32 +6,29 @@ on:
       - production-only
     paths:
       - 'public/**'
-      - '.github/workflows/**'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
+      
       - name: Show GitHub Actions IP
         run: curl -s https://api.ipify.org
-
-      - name: Deploy public/ to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          source: "public/"
-          target: "/var/www/k-app/"
-          strip_components: 1
-
+      
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+      
+      - name: Deploy via SCP (native)
+        run: |
+          scp -o StrictHostKeyChecking=no -r ./public/* ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/k-app/public/
+      
       - name: Reload Nginx
-        uses: appleboy/ssh-action@v0.1.10
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          script: systemctl reload nginx
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "systemctl reload nginx"
