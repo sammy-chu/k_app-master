@@ -639,6 +639,29 @@ async function fetchData() {
 }
 
 // ── APPLY FILTER ──────────────────────────────────────────────────────────
+const LS_KEY_OSC = 'screener_oscillator_filters';
+function saveFilters() {
+  const state = {};
+  FILTER_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) state[id] = el.value;
+  });
+  const sym = document.getElementById('symbolInput');
+  if (sym) state.symbolInput = sym.value;
+  try { localStorage.setItem(LS_KEY_OSC, JSON.stringify(state)); } catch(e) {}
+}
+function restoreFilters() {
+  let state;
+  try { state = JSON.parse(localStorage.getItem(LS_KEY_OSC)); } catch(e) {}
+  if (!state) return;
+  FILTER_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el && state[id] != null) el.value = state[id];
+  });
+  const sym = document.getElementById('symbolInput');
+  if (sym && state.symbolInput != null) sym.value = state.symbolInput;
+}
+
 function applyFilter() {
   updateHighlights();
   const priceMin  = getV('priceMin');
@@ -843,8 +866,8 @@ document.addEventListener('visibilitychange', () => {
 FILTER_IDS.forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
-  el.addEventListener('input',   () => applyFilter());
-  el.addEventListener('keydown', e => { if (e.key === 'Enter') applyFilter(); });
+  el.addEventListener('input',   () => { saveFilters(); applyFilter(); });
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') { saveFilters(); applyFilter(); } });
 });
 
 const manualBlockInputEl = document.getElementById('manual-block-input');
@@ -886,6 +909,7 @@ document.addEventListener('contextmenu', e => {
 });
 
 saveBlocked();
+restoreFilters();
 fetchData();
 </script>
 </body>

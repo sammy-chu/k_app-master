@@ -389,8 +389,23 @@
         }
 
         // 绑定事件
+        const LS_KEY_LO = 'large_orders_filters';
+        const FILTER_IDS_LO = ['min-order-vol','min-total-vol','max-total-vol','time-window','side-filter','min-price','max-price','sort-method','display-limit'];
+        function saveFilters() {
+            const state = {};
+            FILTER_IDS_LO.forEach(id => { const el = document.getElementById(id); if (el) state[id] = el.value; });
+            try { localStorage.setItem(LS_KEY_LO, JSON.stringify(state)); } catch(e) {}
+        }
+        function restoreFilters() {
+            let state;
+            try { state = JSON.parse(localStorage.getItem(LS_KEY_LO)); } catch(e) {}
+            if (!state) return;
+            FILTER_IDS_LO.forEach(id => { const el = document.getElementById(id); if (el && state[id] != null) el.value = state[id]; });
+        }
+
         ['min-order-vol', 'min-total-vol', 'max-total-vol', 'time-window', 'side-filter', 'min-price', 'max-price', 'sort-method', 'display-limit'].forEach(id => {
             document.getElementById(id).addEventListener('change', () => {
+                saveFilters();
                 fetchData();
                 // 重置定时器
                 clearInterval(fetchTimer);
@@ -421,6 +436,7 @@
         });
 
         // 初始加载与自动刷新
+        restoreFilters();
         fetchData();
         fetchTimer = setInterval(fetchData, 1000); // 每 1 秒刷新一次
     </script>

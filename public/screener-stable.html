@@ -788,11 +788,29 @@ async function fetchData(params) {
 function run() {
   updateHighlights();
   if (allData.length === 0) {
-    // 尚无数据，先拉取
     fetchData({});
   } else {
     applyFilter();
   }
+}
+
+const LS_KEY_STABLE = 'screener_stable_filters';
+function saveFilters() {
+  const state = {};
+  ['priceMin','priceMax','changeMin','changeMax','volMin','volMax','changeAmtMin','changeAmtMax','symbolInput','timeFrom','timeTo'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) state[id] = el.value;
+  });
+  try { localStorage.setItem(LS_KEY_STABLE, JSON.stringify(state)); } catch(e) {}
+}
+function restoreFilters() {
+  let state;
+  try { state = JSON.parse(localStorage.getItem(LS_KEY_STABLE)); } catch(e) {}
+  if (!state) return;
+  ['priceMin','priceMax','changeMin','changeMax','volMin','volMax','changeAmtMin','changeAmtMax','symbolInput','timeFrom','timeTo'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && state[id] != null) el.value = state[id];
+  });
 }
 
 // ── APPLY FILTER（只保留6条规则全部通过的）────────────────────────────────
@@ -1310,9 +1328,9 @@ document.addEventListener('visibilitychange', () => {
  'changeAmtMin','changeAmtMax'].forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
-  el.addEventListener('input',   () => run());
-  el.addEventListener('change',  () => run());
-  el.addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+  el.addEventListener('input',   () => { saveFilters(); run(); });
+  el.addEventListener('change',  () => { saveFilters(); run(); });
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') { saveFilters(); run(); } });
 });
 
 const manualBlockInputEl = document.getElementById('manual-block-input');
@@ -1354,6 +1372,7 @@ document.addEventListener('contextmenu', e => {
 });
 
 saveBlocked();
+restoreFilters();
 run();
 </script>
 </body>

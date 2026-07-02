@@ -598,11 +598,34 @@
     }
   }
 
+  const LS_KEY = 'screener_filters';
+
+  function saveFilters() {
+    const state = { logic };
+    FIELDS.forEach(([id]) => { state[id] = document.getElementById(id).value; });
+    state.orderVolMin = document.getElementById('orderVolMin').value;
+    state.orderVolMax = document.getElementById('orderVolMax').value;
+    state.orderSide   = document.getElementById('orderSide').value;
+    try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch(e) {}
+  }
+
+  function restoreFilters() {
+    let state;
+    try { state = JSON.parse(localStorage.getItem(LS_KEY)); } catch(e) {}
+    if (!state) return;
+    if (state.logic) setLogic(state.logic);
+    FIELDS.forEach(([id]) => { if (state[id] != null) document.getElementById(id).value = state[id]; });
+    if (state.orderVolMin != null) document.getElementById('orderVolMin').value = state.orderVolMin;
+    if (state.orderVolMax != null) document.getElementById('orderVolMax').value = state.orderVolMax;
+    if (state.orderSide   != null) document.getElementById('orderSide').value   = state.orderSide;
+  }
+
   function run() {
     updateInputHighlights();
     const params = getParams();
     lastParams = params;
     renderTags(params);
+    saveFilters();
     fetchData(params);
   }
 
@@ -747,6 +770,7 @@
     document.getElementById(id).addEventListener('keydown', e => { if (e.key==='Enter') run(); });
   });
 
+  restoreFilters();
   run();
   startAutoRefresh();
 </script>

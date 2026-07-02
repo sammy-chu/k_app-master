@@ -586,12 +586,24 @@
     else { fetchData(); startAutoRefresh(); }
   });
 
+  const LS_KEY_SWING = 'swing_screener_filters';
+  function saveFilters() {
+    try { localStorage.setItem(LS_KEY_SWING, JSON.stringify({ minVolume: document.getElementById('minVolume').value })); } catch(e) {}
+  }
+  function restoreFilters() {
+    let state;
+    try { state = JSON.parse(localStorage.getItem(LS_KEY_SWING)); } catch(e) {}
+    if (state && state.minVolume != null) document.getElementById('minVolume').value = state.minVolume;
+  }
+
   let debounceTimer;
   document.getElementById('minVolume').addEventListener('input', () => {
     clearTimeout(debounceTimer);
+    saveFilters();
     debounceTimer = setTimeout(fetchData, 600);
   });
 
+  restoreFilters();
   fetchData();
   startAutoRefresh();
 
