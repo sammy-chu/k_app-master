@@ -5,9 +5,10 @@ name: Deploy Frontend to Cloud Server
 
 on:
   push:
-    branches: [production-only]
-  # 仅当 public 目录有变更时触发
-  paths: ['public/**']
+    branches:
+      - production-only
+    paths:
+      - 'public/**'
 
 jobs:
   deploy:
