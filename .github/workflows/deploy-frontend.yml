@@ -18,10 +18,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # (可选) 如果你不想在 Nginx 使用 sub_filter，可以在这里直接注入 API_BASE
-      # - name: Inject API_BASE to HTML
-      #   run: |
-      #     find public -name "*.html" -exec sed -i 's|<head>|<head><script>window.API_BASE="https://api.yourdomain.com";</script>|g' {} +
+      - name: Show GitHub Actions IP
+        run: curl -s https://api.ipify.org
 
       - name: Deploy public/ to server
         uses: appleboy/scp-action@v0.1.7
