@@ -3863,7 +3863,7 @@ async function scanAndInsertHillAlerts() {
   try {
     const result = await getFlexibleHills(pool);
     if (!result || !result.data || result.data.length === 0) {
-      console.log(`[HillMonitor] No hills detected (date: ${result ? result.date : 'unknown'}, count: ${result ? result.count : 0})`);
+      console.log(`[HillMonitor] No hills detected (date: ${result && result.date ? new Date(result.date).toISOString().slice(0, 10) : 'unknown'}, count: ${result ? result.count : 0})`);
       return;
     }
 
@@ -3892,7 +3892,7 @@ async function scanAndInsertHillAlerts() {
     }
 
     if (inserted > 0) {
-      console.log(`[HillMonitor] Inserted ${inserted} hill alerts (date: ${result.date})`);
+      console.log(`[HillMonitor] Inserted ${inserted} hill alerts (date: ${new Date(result.date).toISOString().slice(0, 10)})`);
     }
   } catch (e) {
     console.error('[HillMonitor] Error:', e.message);
@@ -4188,6 +4188,190 @@ app.get('/api/volatility/history', async (req, res) => {
   }
 });
 
+// ==========================================
+// Scanners API (Real-time from minute_indicators)
+// ==========================================
+
+function evaluateScanner(row, scannerType) {
+  const close = parseFloat(row.close);
+  const atr10 = parseFloat(row.atr10);
+  const atr30 = parseFloat(row.atr30);
+  const atr_day5 = parseFloat(row.atr_day5);
+  const ma_atr15 = parseFloat(row.ma_atr15);
+  const slope10 = parseFloat(row.slope10);
+  const hv10 = parseFloat(row.hv10);
+  const ma_hv15 = parseFloat(row.ma_hv15);
+  const vol10 = parseFloat(row.vol10);
+  const vol60 = parseFloat(row.vol60);
+  const count_upper10 = parseInt(row.count_upper10);
+  const count_lower10 = parseInt(row.count_lower10);
+  const hh10 = parseFloat(row.hh10);
+  const ll10 = parseFloat(row.ll10);
+  const up_count20 = parseInt(row.up_count20);
+  const dn_count20 = parseInt(row.dn_count20);
+
+  let conditions = {};
+  let passedCount = 0;
+  
+  const safeDiv = (a, b) => (b && b !== 0 ? a / b : null);
+
+  if (scannerType === 'BREAKOUT') {
+    const atrRatio = safeDiv(atr10, atr30);
+    conditions.atr_compression = { actual: atrRatio, pass: atrRatio !== null && atrRatio < 0.5 };
+    
+    const dayAtrRatio = safeDiv(atr_day5, close);
+    conditions.atr_not_expanded = { actual: dayAtrRatio, pass: dayAtrRatio !== null && dayAtrRatio > 0.02 };
+    
+    const atrStab = safeDiv(atr10, ma_atr15);
+    conditions.atr_stable = { actual: atrStab, pass: atrStab !== null && atr10 < ma_atr15 * 1.3 };
+    
+    conditions.normalized_slope_flat = { actual: Math.abs(slope10), pass: !isNaN(slope10) && Math.abs(slope10) < 0.0025 };
+    
+    const hvRatio = safeDiv(hv10, ma_hv15);
+    conditions.hv_compression = { actual: hvRatio, pass: hvRatio !== null && hvRatio < 0.5 };
+    
+    const volRatio = safeDiv(vol10, vol60);
+    conditions.volume_compression = { actual: volRatio, pass: volRatio !== null && volRatio >= 0.3 && volRatio <= 0.7 };
+    
+    conditions.range_touch = { actual: `upper:${count_upper10}, lower:${count_lower10}`, pass: !isNaN(count_upper10) && !isNaN(count_lower10) && count_upper10 >= 2 && count_lower10 >= 2 && (count_upper10 + count_lower10) >= 5 };
+    
+    conditions.distribution_balance = { actual: `up:${up_count20}, dn:${dn_count20}`, pass: !isNaN(up_count20) && !isNaN(dn_count20) && up_count20 >= 6 && dn_count20 >= 6 };
+  } else if (scannerType === 'RANGE') {
+    const atrRatio = safeDiv(atr10, atr30);
+    conditions.atr_ratio = { actual: atrRatio, pass: atrRatio !== null && atrRatio >= 0.3 && atrRatio <= 1.2 };
+    
+    const dayAtrRatio = safeDiv(atr_day5, close);
+    conditions.day_atr_ratio = { actual: dayAtrRatio, pass: dayAtrRatio !== null && dayAtrRatio > 0.02 };
+    
+    const atrStab = safeDiv(atr10, ma_atr15);
+    conditions.atr_stable = { actual: atrStab, pass: atrStab !== null && atr10 < ma_atr15 * 1.3 };
+    
+    const box = hh10 - ll10;
+    const slopeBias = !isNaN(slope10) && !isNaN(box) && box !== 0 ? Math.abs(10 * slope10) / box : null;
+    conditions.slope_bias = { actual: slopeBias, pass: slopeBias !== null && slopeBias <= 0.2 };
+    
+    const hvRatio = safeDiv(hv10, ma_hv15);
+    conditions.hv_ratio = { actual: hvRatio, pass: hvRatio !== null && hvRatio < 0.7 };
+    
+    const volRatio = safeDiv(vol10, vol60);
+    conditions.volume_ratio = { actual: volRatio, pass: volRatio !== null && volRatio >= 0.35 && volRatio <= 1.3 };
+    
+    conditions.range_touch = { actual: `upper:${count_upper10}, lower:${count_lower10}`, pass: !isNaN(count_upper10) && !isNaN(count_lower10) && (count_upper10 >= 2 || count_lower10 >= 2) };
+    
+    conditions.distribution_balance = { actual: `up:${up_count20}, dn:${dn_count20}`, pass: !isNaN(up_count20) && !isNaN(dn_count20) && up_count20 >= 6 && dn_count20 >= 6 };
+  }
+
+  for (const key in conditions) {
+    if (conditions[key].pass) passedCount++;
+  }
+
+  const score = Math.round((passedCount / 8) * 100);
+  return { score, conditions };
+}
+
+// GET /api/scanners - Summary of all scanners
+app.get('/api/scanners', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      WITH latest_indicators AS (
+        SELECT DISTINCT ON (symbol) *
+        FROM market_data.minute_indicators
+        WHERE bar_time >= NOW() - INTERVAL '15 minutes'
+        ORDER BY symbol, bar_time DESC
+      )
+      SELECT 
+        li.*, 
+        COALESCE(os.volume, ds.total_volume, 0) AS current_total_volume
+      FROM latest_indicators li
+      LEFT JOIN market_data.ohlc_snapshot os ON os.symbol = li.symbol AND os.trade_date = CURRENT_DATE
+      LEFT JOIN market_data.daily_summary ds ON ds.symbol = li.symbol AND ds.trade_date = CURRENT_DATE
+    `);
+    
+    let breakoutCount = 0;
+    let rangeCount = 0;
+    
+    for (const row of rows) {
+      if (evaluateScanner(row, 'BREAKOUT').score >= 70) breakoutCount++;
+      if (evaluateScanner(row, 'RANGE').score >= 70) rangeCount++;
+    }
+    
+    res.json([
+      { type: 'BREAKOUT', count: breakoutCount },
+      { type: 'RANGE', count: rangeCount }
+    ]);
+  } catch (e) {
+    console.error('[scanners/summary]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/scanners/:type - Detail of a specific scanner
+app.get('/api/scanners/:type', async (req, res) => {
+  const scannerType = req.params.type.toUpperCase();
+  const minScore = parseInt(req.query.min_score || '70');
+  const limit = parseInt(req.query.limit || '50');
+  
+  try {
+    const { rows } = await pool.query(`
+      WITH latest_indicators AS (
+        SELECT DISTINCT ON (symbol) *
+        FROM market_data.minute_indicators
+        WHERE bar_time >= NOW() - INTERVAL '15 minutes'
+        ORDER BY symbol, bar_time DESC
+      )
+      SELECT 
+        li.*, 
+        COALESCE(os.volume, ds.total_volume, 0) AS current_total_volume
+      FROM latest_indicators li
+      LEFT JOIN market_data.ohlc_snapshot os ON os.symbol = li.symbol AND os.trade_date = CURRENT_DATE
+      LEFT JOIN market_data.daily_summary ds ON ds.symbol = li.symbol AND ds.trade_date = CURRENT_DATE
+    `);
+    
+    let items = [];
+    
+    for (const row of rows) {
+      const evaluation = evaluateScanner(row, scannerType);
+      if (evaluation.score >= minScore) {
+        items.push({
+          symbol: row.symbol,
+          signal: {
+            score: evaluation.score,
+            type: scannerType,
+            bar_time: row.bar_time,
+            stage: scannerType === 'BREAKOUT' ? 'WATCH' : 'A'
+          },
+          indicators: {
+            close: row.close != null ? parseFloat(row.close) : null,
+            volume: row.current_total_volume != null ? parseFloat(row.current_total_volume) : null,
+            atr10: row.atr10 != null ? parseFloat(row.atr10) : null,
+            atr30: row.atr30 != null ? parseFloat(row.atr30) : null,
+            slope10: row.slope10 != null ? parseFloat(row.slope10) : null,
+            range10: row.range10 != null ? parseFloat(row.range10) : null,
+            hh20: row.hh20 != null ? parseFloat(row.hh20) : null,
+            ll20: row.ll20 != null ? parseFloat(row.ll20) : null,
+            up_count20: row.up_count20 != null ? parseInt(row.up_count20) : null,
+            dn_count20: row.dn_count20 != null ? parseInt(row.dn_count20) : null
+          },
+          conditions: evaluation.conditions
+        });
+      }
+    }
+    
+    items.sort((a, b) => b.signal.score - a.signal.score);
+    items = items.slice(0, limit);
+
+    res.json({
+      scanner: scannerType,
+      timestamp: new Date().toISOString(),
+      count: items.length,
+      items: items
+    });
+  } catch (e) {
+    console.error(`[scanners/${scannerType}]`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // 静态文件服务
 app.use(express.static(path.join(__dirname, '../public'), {
     setHeaders: (res) => {
@@ -4211,6 +4395,8 @@ app.get('/volatility',          (req, res) => res.sendFile(path.join(__dirname, 
 app.get('/active-trading',      (req, res) => res.sendFile(path.join(__dirname, '../public/active-trading.html')));
 app.get('/abnormal-trades',     (req, res) => res.sendFile(path.join(__dirname, '../public/abnormal-trades.html')));
 app.get('/volume-chart',        (req, res) => res.sendFile(path.join(__dirname, '../public/volume-chart.html')));
+app.get('/screener-breakout',   (req, res) => res.sendFile(path.join(__dirname, '../public/screener-breakout.html')));
+app.get('/screener-range',      (req, res) => res.sendFile(path.join(__dirname, '../public/screener-range.html')));
 
 ensureTables().then(() => {
   startAlertMonitor();

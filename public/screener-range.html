@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>小区间震荡监控 (Range)</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #1a1a1a;
+      color: #ddd;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    .container { max-width: 1600px; margin: 0 auto; }
+
+    /* ── 导航 ── */
+    .nav-links { text-align: center; margin-bottom: 20px; }
+    .nav-links a {
+      color: #007acc; text-decoration: none; padding: 6px 14px; margin: 0 6px;
+      border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;
+      display: inline-block; font-size: 13px;
+    }
+    .nav-links a:hover { background-color: #007acc; color: white; }
+    .nav-links a.active { background-color: #007acc; color: white; }
+
+    /* ── 标题栏 ── */
+    .header-bar {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 16px; border-bottom: 1px solid #333; padding-bottom: 12px;
+    }
+    .title { font-size: 1.4em; color: #ddd; font-weight: normal; }
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    .refresh-info { font-size: 12px; color: #888; white-space: nowrap; }
+    .status-dot {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      background: #555; margin-right: 6px; vertical-align: middle;
+      transition: background 0.3s;
+    }
+    .status-dot.live  { background: #26a69a; box-shadow: 0 0 5px #26a69a; }
+    .status-dot.error { background: #ef5350; }
+
+    /* ── 表格 ── */
+    table {
+      width: 100%; border-collapse: collapse;
+      background-color: #252525; border-radius: 8px; overflow: hidden;
+      font-size: 13px;
+    }
+    th, td { padding: 9px 12px; text-align: right; border-bottom: 1px solid #2e2e2e; }
+    th {
+      background-color: #333; color: #bbb; font-weight: 600;
+      font-size: 12px; white-space: nowrap;
+    }
+    th:first-child, td:first-child { text-align: left; padding-left: 14px; }
+    tr:hover td { background-color: #2a2a2a; }
+
+    .sym { font-weight: bold; color: #fff; font-size: 14px; }
+    .score-high { color: #51cf66; font-weight: bold; }
+    .score-med { color: #fcc419; }
+
+    /* ── 详情样式 ── */
+    .details {
+      font-size: 12px;
+      color: #aaa;
+      text-align: left;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .detail-item {
+      background: #333;
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid #444;
+    }
+    .pass-true { color: #51cf66; border-color: #51cf6633; background: #51cf6611; }
+    .pass-false { color: #ff6b6b; border-color: #ff6b6b33; background: #ff6b6b11; }
+
+    /* ── 竖线分隔 ── */
+    .col-divider { border-left: 1px solid #444 !important; }
+    td.col-divider { border-left: 1px solid #444 !important; }
+    
+    .cell-val { font-size: 13px; font-weight: 500; }
+    .cell-icon { font-size: 11px; margin-left: 4px; }
+
+    /* ── 条件说明面板 ── */
+    .info-panel {
+      background: #222;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      font-size: 12px;
+      color: #bbb;
+    }
+    .info-panel h3 {
+      font-size: 13px;
+      color: #007acc;
+      margin-bottom: 8px;
+    }
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px 16px;
+    }
+    .info-item {
+      display: flex;
+      flex-direction: column;
+    }
+    .info-key {
+      color: #ddd;
+      font-weight: bold;
+    }
+    .info-desc {
+      color: #888;
+    }
+
+    /* ── 筛选面板 ── */
+    .filter-panel-wrap { margin-bottom: 14px; }
+    .filter-toggle-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 7px 14px; background: #2a2a2a; border-radius: 6px;
+      cursor: pointer; user-select: none;
+      border: 1px solid #333; transition: border-color 0.15s;
+    }
+    .filter-toggle-bar:hover { border-color: #444; }
+    .filter-toggle-left { display: flex; align-items: center; gap: 10px; }
+    .filter-toggle-label { font-size: 12px; color: #666; }
+    .filter-active-pills { display: flex; gap: 5px; flex-wrap: wrap; }
+    .filter-pill {
+      font-size: 11px; padding: 1px 8px; border-radius: 10px;
+      background: #007acc1a; border: 1px solid #007acc44; color: #7ac0f0;
+    }
+    .filter-chevron { font-size: 10px; color: #555; transition: transform 0.2s ease; }
+    .filter-chevron.open { transform: rotate(180deg); }
+    .filter-body {
+      overflow: hidden; max-height: 0; opacity: 0;
+      transition: max-height 0.25s ease, opacity 0.2s ease;
+    }
+    .filter-body.open { max-height: 180px; opacity: 1; }
+    .filter-panel {
+      background: #2a2a2a; padding: 12px 16px 14px;
+      border-radius: 0 0 6px 6px; border-top: 1px solid #333;
+      display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: flex-end;
+    }
+    .filter-group { display: flex; flex-direction: column; gap: 4px; }
+    .filter-group label { font-size: 12px; color: #888; }
+    .filter-row { display: flex; align-items: center; gap: 5px; }
+    .filter-sep { font-size: 12px; color: #555; }
+
+    input[type=number], input[type=text] {
+      background: #1a1a1a; border: 1px solid #444; color: #ddd;
+      padding: 5px 8px; border-radius: 4px; font-size: 13px;
+      outline: none; transition: border-color 0.15s;
+    }
+    input[type=number] { width: 80px; -moz-appearance: textfield; }
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+    input[type=number]:focus, input[type=text]:focus { border-color: #007acc; }
+    input[type=number]::placeholder,
+    input[type=text]::placeholder { color: #555; }
+    input[type=number].has-value { border-color: #007acc55; color: #7ac0f0; }
+
+    .filter-actions { display: flex; align-items: flex-end; gap: 8px; margin-left: auto; }
+    .btn {
+      padding: 6px 16px; border-radius: 4px; border: 1px solid #444;
+      background: #1a1a1a; color: #ccc; font-size: 13px; cursor: pointer;
+      transition: all 0.15s; white-space: nowrap;
+    }
+    .btn:hover { border-color: #888; color: #fff; }
+    .btn.primary { border-color: #007acc; color: #7ac0f0; background: #007acc18; }
+    .btn.primary:hover { background: #007acc30; }
+
+    /* ── 屏蔽管理按钮 ── */
+    .block-btn {
+      background: #1a1a1a; border: 1px solid #444; color: #aaa;
+      padding: 5px 12px; border-radius: 4px; font-size: 13px;
+      cursor: pointer; transition: all 0.15s; white-space: nowrap;
+    }
+    .block-btn:hover { border-color: #ef5350; color: #ef5350; }
+    .block-btn.has-blocked { border-color: #ef5350; color: #ef5350; }
+
+    /* ── 右键菜单 ── */
+    #ctx-menu {
+      position: fixed; background: #2a2a2a; border: 1px solid #444;
+      border-radius: 4px; padding: 4px 0; z-index: 9999; min-width: 150px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5); display: none;
+    }
+    #ctx-menu .ctx-item { padding: 8px 14px; font-size: 13px; cursor: pointer; color: #ddd; white-space: nowrap; }
+    #ctx-menu .ctx-item:hover { background: #3a3a3a; }
+    #ctx-menu .ctx-item.danger { color: #ef5350; }
+
+    /* ── 屏蔽管理浮层 ── */
+    #block-modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+      z-index: 9000; align-items: center; justify-content: center;
+    }
+    #block-modal-overlay.open { display: flex; }
+    #block-modal {
+      background: #252525; border: 1px solid #444; border-radius: 8px;
+      width: 420px; max-height: 70vh; display: flex; flex-direction: column; overflow: hidden;
+    }
+    .modal-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 16px; border-bottom: 1px solid #333; font-size: 14px; color: #ddd;
+    }
+    .modal-close { background: none; border: none; color: #666; font-size: 18px; cursor: pointer; line-height: 1; }
+    .modal-close:hover { color: #ddd; }
+    .modal-add { display: flex; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #333; }
+    .modal-add input { flex: 1; }
+    .modal-add button {
+      background: none; border: 1px solid #555; color: #aaa; padding: 5px 12px;
+      border-radius: 3px; font-size: 13px; cursor: pointer; white-space: nowrap;
+    }
+    .modal-add button:hover { border-color: #ef5350; color: #ef5350; }
+    .modal-body { flex: 1; overflow-y: auto; padding: 10px 16px; }
+    .modal-empty { text-align: center; padding: 30px; color: #555; font-size: 13px; }
+    .block-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 7px 0; border-bottom: 1px solid #2e2e2e; font-size: 13px;
+    }
+    .block-item:last-child { border-bottom: none; }
+    .block-item-code { color: #fff; font-weight: 600; }
+    .unblock-btn {
+      background: none; border: 1px solid #555; color: #aaa; padding: 2px 8px;
+      border-radius: 3px; font-size: 12px; cursor: pointer;
+    }
+    .unblock-btn:hover { border-color: #26a69a; color: #26a69a; }
+    .modal-footer { padding: 10px 16px; border-top: 1px solid #333; display: flex; justify-content: flex-end; gap: 8px; }
+    .modal-footer button {
+      padding: 5px 14px; border-radius: 3px; font-size: 13px; cursor: pointer;
+      border: 1px solid #555; background: none; color: #aaa;
+    }
+    .modal-footer button:hover { border-color: #ddd; color: #ddd; }
+    .modal-footer .btn-danger { border-color: #ef5350; color: #ef5350; }
+    .modal-footer .btn-danger:hover { background: rgba(239,83,80,0.12); }
+
+    /* ── 代码列：行内屏蔽按钮，hover 时显示 ── */
+    .symbol-cell { display: inline-flex; align-items: center; gap: 5px; }
+    .btn-block-inline {
+      display: none; background: none; border: 1px solid #555; color: #777;
+      font-size: 11px; line-height: 1; padding: 1px 4px; border-radius: 3px;
+      cursor: pointer; flex-shrink: 0;
+    }
+    tr:hover .btn-block-inline { display: inline-block; }
+    .btn-block-inline:hover { border-color: #ef5350; color: #ef5350; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="nav-links">
+      <a href="/">返回首页</a>
+      <a href="/screener-breakout">突破监控 (Breakout)</a>
+      <a href="/screener-range" class="active">震荡监控 (Range)</a>
+    </div>
+
+    <div class="header-bar">
+      <h1 class="title">小区间震荡监控 (Range)</h1>
+      <div class="header-right">
+        <button class="block-btn" id="btn-manage-block" onclick="openBlockModal()">🚫 屏蔽管理</button>
+        <span class="refresh-info">
+          <span id="status-dot" class="status-dot live"></span>
+          <span id="update-time">等待数据...</span>
+        </span>
+      </div>
+    </div>
+
+    <div class="info-panel">
+      <h3>核心逻辑：捕捉价格在明确区间内有序波动，适合高抛低吸策略。</h3>
+      <div class="info-grid">
+        <div class="info-item"><span class="info-key">A: 0.3 ≤ ATR Ratio ≤ 1.2</span><span class="info-desc">短期与中期波动相对均衡</span></div>
+        <div class="info-item"><span class="info-key">B: Day ATR% > 0.02</span><span class="info-desc">日线波动足够（交易活跃）</span></div>
+        <div class="info-item"><span class="info-key">C: ATR Stab < 1.3</span><span class="info-desc">短期波动未过度放大</span></div>
+        <div class="info-item"><span class="info-key">D: |Slope Bias| ≤ 0.2</span><span class="info-desc">价格重心偏移在区间20%以内</span></div>
+        <div class="info-item"><span class="info-key">E: HV Ratio < 0.7</span><span class="info-desc">短期波动率低于历史均值（相对平静）</span></div>
+        <div class="info-item"><span class="info-key">F: 0.35 ≤ VOL Ratio ≤ 1.3</span><span class="info-desc">成交量相对均衡（温和换手）</span></div>
+        <div class="info-item"><span class="info-key">G: Touch (a≥2 或 b≥2)</span><span class="info-desc">价格至少触碰一次上下虚线之一</span></div>
+        <div class="info-item"><span class="info-key">H: Up≥6 且 Dn≥6</span><span class="info-desc">中长期价格均匀分布</span></div>
+      </div>
+    </div>
+
+    <!-- 筛选面板 -->
+    <div class="filter-panel-wrap">
+      <div class="filter-toggle-bar" onclick="toggleFilter()">
+        <div class="filter-toggle-left">
+          <span class="filter-toggle-label">筛选条件</span>
+          <div class="filter-active-pills" id="filterPills"></div>
+        </div>
+        <span class="filter-chevron" id="filterChevron">▼</span>
+      </div>
+      <div class="filter-body" id="filterBody">
+        <div class="filter-panel">
+          <div class="filter-group">
+            <label>价格区间</label>
+            <div class="filter-row">
+              <input type="number" id="priceMin" placeholder="最低" style="width: 80px;" min="0">
+              <span class="filter-sep">—</span>
+              <input type="number" id="priceMax" placeholder="最高" style="width: 80px;" min="0">
+            </div>
+          </div>
+          <div class="filter-group">
+            <label>今日成交量</label>
+            <div class="filter-row">
+              <input type="number" id="volMin" placeholder="最低" style="width: 100px;" min="0">
+              <span class="filter-sep">—</span>
+              <input type="number" id="volMax" placeholder="最高" style="width: 100px;" min="0">
+            </div>
+          </div>
+          <div class="filter-group" style="min-width: 200px;">
+            <label>屏蔽股票 (逗号分隔或回车)</label>
+            <div class="filter-row">
+              <input type="text" id="blockInput" placeholder="如 AAPL, TSLA" style="width: 140px; text-transform: uppercase;" onkeydown="if(event.key==='Enter')addBlocked()">
+              <button class="btn" onclick="addBlocked()">屏蔽</button>
+            </div>
+            <div class="filter-active-pills" id="blockedPills" style="margin-top: 6px;"></div>
+          </div>
+          <div class="filter-actions">
+            <button class="btn" onclick="clearFilters()">清空</button>
+            <button class="btn primary" onclick="applyFilter()">筛选</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <table id="signal-table">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Time</th>
+          <th>Score</th>
+          <th>Price</th>
+          <th>Volume</th>
+          <th class="col-divider">ATR Ratio (A)<br><span style="font-size:10px;color:#888;">ATR10/ATR30</span></th>
+          <th>Day ATR% (B)<br><span style="font-size:10px;color:#888;">DAY5/C</span></th>
+          <th>ATR Stab (C)<br><span style="font-size:10px;color:#888;">ATR10/MA15</span></th>
+          <th>Slope Bias (D)<br><span style="font-size:10px;color:#888;">|SLOPE|/RANGE</span></th>
+          <th>HV Ratio (E)<br><span style="font-size:10px;color:#888;">HV10/MA15</span></th>
+          <th>VOL Ratio (F)<br><span style="font-size:10px;color:#888;">VOL10/VOL60</span></th>
+          <th>Touch (G)<br><span style="font-size:10px;color:#888;">Up/Dn</span></th>
+          <th>Up/Dn (H)<br><span style="font-size:10px;color:#888;">20 periods</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- Data injected here -->
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 右键菜单 -->
+  <div id="ctx-menu">
+    <div class="ctx-item danger" id="ctx-block">屏蔽此股票</div>
+  </div>
+
+  <!-- 屏蔽管理浮层 -->
+  <div id="block-modal-overlay" onclick="closeBlockModal(event)">
+    <div id="block-modal">
+      <div class="modal-header">
+        <span>🚫 屏蔽股票管理 <span style="color:#555;font-size:12px;margin-left:8px">仅存本机浏览器</span></span>
+        <button class="modal-close" onclick="closeBlockModal()">×</button>
+      </div>
+      <div class="modal-add">
+        <input type="text" id="manual-block-input" placeholder="手动输入代码,如 AAPL" onkeydown="if(event.key==='Enter')addManualBlock()">
+        <button onclick="addManualBlock()">添加屏蔽</button>
+      </div>
+      <div class="modal-body" id="block-list"></div>
+      <div class="modal-footer">
+        <button class="btn-danger" onclick="clearAllBlocked()">清空全部</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let autoRefreshTimer = null;
+    let allItems = [];
+    let blockedStocks = JSON.parse(localStorage.getItem('sharedBlockedStocks') || '[]');
+
+    function formatTime(isoString) {
+      if (!isoString) return '-';
+      const d = new Date(isoString);
+      return d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    // ── 屏蔽与过滤逻辑 ──
+    function renderBlockedPills() {
+      const pills = document.getElementById('blockedPills');
+      if (!pills) return;
+      pills.innerHTML = blockedStocks.map(sym => 
+        `<span class="filter-pill">
+          ${sym} <span class="filter-pill-close" onclick="unblockStock('${sym}')">×</span>
+        </span>`
+      ).join('');
+    }
+
+    function saveBlocked() {
+      localStorage.setItem('sharedBlockedStocks', JSON.stringify(blockedStocks));
+      renderBlockedPills();
+      renderBlockList();
+      const btn = document.getElementById('btn-manage-block');
+      if (btn) {
+        if (blockedStocks.length > 0) {
+          btn.classList.add('has-blocked');
+          btn.textContent = `🚫 屏蔽管理 (${blockedStocks.length})`;
+        } else {
+          btn.classList.remove('has-blocked');
+          btn.textContent = '🚫 屏蔽管理';
+        }
+      }
+    }
+
+    function blockStock(sym) {
+      sym = (sym || '').trim().toUpperCase();
+      if (!sym || blockedStocks.includes(sym)) return;
+      blockedStocks.push(sym);
+      saveBlocked();
+      applyFilter();
+    }
+
+    function unblockStock(sym) {
+      blockedStocks = blockedStocks.filter(s => s !== sym);
+      saveBlocked();
+      applyFilter();
+    }
+
+    function addBlocked() {
+      const input = document.getElementById('blockInput');
+      const val = input.value.trim().toUpperCase();
+      if (!val) return;
+      const symbols = val.split(/[,，\s]+/).map(s => s.trim()).filter(s => s);
+      for (const sym of symbols) {
+        if (!blockedStocks.includes(sym)) blockedStocks.push(sym);
+      }
+      input.value = '';
+      saveBlocked();
+      applyFilter();
+    }
+
+    function addManualBlock() {
+      const input = document.getElementById('manual-block-input');
+      if (!input) return;
+      const val = input.value.trim().toUpperCase();
+      if (!val) return;
+      const symbols = val.split(/[,，\s]+/).map(s => s.trim()).filter(s => s);
+      for (const sym of symbols) blockStock(sym);
+      input.value = '';
+    }
+
+    function openBlockModal() {
+      renderBlockList();
+      document.getElementById('block-modal-overlay').classList.add('open');
+    }
+
+    function closeBlockModal(e) {
+      if (e && e.target !== document.getElementById('block-modal-overlay')) return;
+      document.getElementById('block-modal-overlay').classList.remove('open');
+    }
+
+    function renderBlockList() {
+      const container = document.getElementById('block-list');
+      if (!container) return;
+      if (blockedStocks.length === 0) {
+        container.innerHTML = '<div class="modal-empty">暂无屏蔽股票</div>';
+        return;
+      }
+      container.innerHTML = [...blockedStocks].sort().map(sym => `
+        <div class="block-item">
+          <span class="block-item-code">${sym}</span>
+          <button class="unblock-btn" onclick="unblockStock('${sym}')">解除屏蔽</button>
+        </div>
+      `).join('');
+    }
+
+    function clearAllBlocked() {
+      if (blockedStocks.length === 0) return;
+      if (confirm('确认清空所有屏蔽股票?')) {
+        blockedStocks = [];
+        saveBlocked();
+        applyFilter();
+      }
+    }
+
+    let filterOpen = false;
+    function toggleFilter() {
+      filterOpen = !filterOpen;
+      document.getElementById('filterBody').classList.toggle('open', filterOpen);
+      document.getElementById('filterChevron').classList.toggle('open', filterOpen);
+    }
+
+    function clearFilters() {
+      document.getElementById('priceMin').value = '';
+      document.getElementById('priceMax').value = '';
+      document.getElementById('volMin').value = '';
+      document.getElementById('volMax').value = '';
+      applyFilter();
+    }
+
+    function updateFilterPills() {
+      const pMin = document.getElementById('priceMin').value;
+      const pMax = document.getElementById('priceMax').value;
+      const vMin = document.getElementById('volMin').value;
+      const vMax = document.getElementById('volMax').value;
+      
+      const pills = [];
+      if (pMin || pMax) pills.push(`<span class="filter-pill">价: ${pMin||'0'} - ${pMax||'∞'}</span>`);
+      if (vMin || vMax) pills.push(`<span class="filter-pill">量: ${vMin||'0'} - ${vMax||'∞'}</span>`);
+      
+      document.getElementById('filterPills').innerHTML = pills.join('');
+    }
+
+    function applyFilter() {
+      const pMin = parseFloat(document.getElementById('priceMin').value);
+      const pMax = parseFloat(document.getElementById('priceMax').value);
+      const vMin = parseFloat(document.getElementById('volMin').value);
+      const vMax = parseFloat(document.getElementById('volMax').value);
+
+      updateFilterPills();
+
+      const filtered = allItems.filter(item => {
+        if (blockedStocks.includes(item.symbol)) return false;
+        
+        const ind = item.indicators || {};
+        const price = ind.close;
+        if (price != null) {
+          if (!isNaN(pMin) && price < pMin) return false;
+          if (!isNaN(pMax) && price > pMax) return false;
+        }
+
+        const vol = ind.volume;
+        if (vol != null) {
+          if (!isNaN(vMin) && vol < vMin) return false;
+          if (!isNaN(vMax) && vol > vMax) return false;
+        }
+
+        return true;
+      });
+
+      renderTable(filtered);
+    }
+
+    function formatDetails(conditions) {
+      if (!conditions) return '-';
+      let html = '';
+      for (const [key, val] of Object.entries(conditions)) {
+        if (typeof val === 'object' && val !== null && val.actual !== undefined) {
+          const passClass = val.pass ? 'pass-true' : 'pass-false';
+          const actualVal = typeof val.actual === 'number' ? val.actual.toFixed(4) : val.actual;
+          html += `<div class="detail-item ${passClass}">${key}: ${actualVal}</div>`;
+        }
+      }
+      return html;
+    }
+
+    async function fetchData() {
+      const dot = document.getElementById('status-dot');
+      try {
+        const res = await fetch('/api/scanners/RANGE?min_score=70&limit=100');
+        if (!res.ok) throw new Error('Network response was not ok');
+        const data = await res.json();
+        
+        document.getElementById('update-time').textContent = '最后更新: ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        dot.className = 'status-dot live';
+        allItems = data.items || [];
+        applyFilter();
+      } catch (err) {
+        console.error('Fetch error:', err);
+        dot.className = 'status-dot error';
+        document.getElementById('update-time').textContent = '连接断开';
+      }
+    }
+
+    function formatVal(c, isPct=false) {
+      if (!c || c.actual === undefined || c.actual === null) return '-';
+      return isPct ? (Number(c.actual) * 100).toFixed(1) + '%' : Number(c.actual).toFixed(2);
+    }
+    
+    function formatIcon(c) {
+      if (!c || c.actual === undefined || c.actual === null) return '';
+      return c.pass ? '✅' : '❌';
+    }
+
+    function renderTable(items) {
+      const tbody = document.querySelector('#signal-table tbody');
+      
+      if (items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="13" style="text-align: center; color: #666; padding: 20px;">暂无震荡信号</td></tr>';
+        return;
+      }
+      
+      let html = '';
+      items.forEach(item => {
+        const sig = item.signal || { score: item.score, type: 'RANGE', bar_time: item.bar_time, stage: 'A' };
+        const ind = item.indicators || (item.metrics ? { ...item.metrics, close: item.price?.close, volume: item.price?.volume } : {});
+        const cond = item.conditions || {};
+        
+        const scoreClass = sig.score >= 80 ? 'score-high' : 'score-med';
+        
+        const cA = cond.atr_ratio || cond.range_narrow || {};
+        const cB = cond.day_atr_ratio || cond.range_narrow || {};
+        const cC = cond.atr_stable || cond.atr_expansion || {};
+        const cD = cond.slope_bias || cond.normalized_slope_flat || {};
+        const cE = cond.hv_ratio || cond.hv_compression || {};
+        const cF = cond.volume_ratio || cond.vol_ratio || {};
+        const cG = cond.range_touch || {};
+        const cH = cond.distribution_balance || cond.bounds_balanced || {};
+
+        let vG = '-';
+        if (cG.actual !== undefined) {
+          const m = String(cG.actual).match(/upper:\s*(\d+),\s*lower:\s*(\d+)/);
+          vG = m ? `${m[1]}/${m[2]}` : cG.actual;
+        }
+
+        let vH = '-';
+        if (cH.actual !== undefined) {
+          const m = String(cH.actual).match(/up:\s*(\d+),\s*dn:\s*(\d+)/);
+          vH = m ? `${m[1]}/${m[2]}` : cH.actual;
+        }
+
+        html += `
+          <tr data-sym="${item.symbol}">
+            <td><div class="symbol-cell"><span class="sym">${item.symbol}</span><button class="btn-block-inline" onclick="blockStock('${item.symbol}')" title="屏蔽此股票">×</button></div></td>
+            <td>${formatTime(sig.bar_time)}</td>
+            <td class="${scoreClass}">${sig.score}</td>
+            <td style="color:#26a69a;">${ind.close ? ind.close.toFixed(2) : '-'}</td>
+            <td style="color:#888;">${ind.volume ? ind.volume.toLocaleString() : '-'}</td>
+            
+            <td class="col-divider"><span class="cell-val" style="color:${cA.pass?'#51cf66':'#ff6b6b'}">${formatVal(cA)}</span><span class="cell-icon">${formatIcon(cA)}</span></td>
+            <td><span class="cell-val" style="color:${cB.pass?'#51cf66':'#ff6b6b'}">${formatVal(cB, true)}</span><span class="cell-icon">${formatIcon(cB)}</span></td>
+            <td><span class="cell-val" style="color:${cC.pass?'#51cf66':'#ff6b6b'}">${formatVal(cC)}</span><span class="cell-icon">${formatIcon(cC)}</span></td>
+            <td><span class="cell-val" style="color:${cD.pass?'#51cf66':'#ff6b6b'}">${cD.actual !== undefined ? Number(cD.actual).toFixed(4) : '-'}</span><span class="cell-icon">${formatIcon(cD)}</span></td>
+            <td><span class="cell-val" style="color:${cE.pass?'#51cf66':'#ff6b6b'}">${formatVal(cE)}</span><span class="cell-icon">${formatIcon(cE)}</span></td>
+            <td><span class="cell-val" style="color:${cF.pass?'#51cf66':'#ff6b6b'}">${formatVal(cF)}</span><span class="cell-icon">${formatIcon(cF)}</span></td>
+            <td><span class="cell-val" style="color:${cG.pass?'#51cf66':'#ff6b6b'}">${vG}</span><span class="cell-icon">${formatIcon(cG)}</span></td>
+            <td><span class="cell-val" style="color:${cH.pass?'#51cf66':'#ff6b6b'}">${vH}</span><span class="cell-icon">${formatIcon(cH)}</span></td>
+          </tr>
+        `;
+      });
+      tbody.innerHTML = html;
+    }
+
+    // ── 右键菜单：屏蔽此股票 ──
+    let ctxTarget = null;
+    const ctxMenu = document.getElementById('ctx-menu');
+
+    document.querySelector('#signal-table tbody').addEventListener('contextmenu', e => {
+      const tr = e.target.closest('tr[data-sym]');
+      if (!tr) return;
+      e.preventDefault();
+      ctxTarget = tr.dataset.sym;
+
+      document.getElementById('ctx-block').textContent = `🚫 屏蔽 ${ctxTarget}`;
+      ctxMenu.style.display = 'block';
+      const x = Math.min(e.clientX, window.innerWidth  - ctxMenu.offsetWidth  - 4);
+      const y = Math.min(e.clientY, window.innerHeight - ctxMenu.offsetHeight - 4);
+      ctxMenu.style.left = x + 'px';
+      ctxMenu.style.top  = y + 'px';
+    });
+
+    document.getElementById('ctx-block').addEventListener('click', () => {
+      if (ctxTarget) blockStock(ctxTarget);
+      ctxMenu.style.display = 'none';
+    });
+
+    document.addEventListener('click', () => { ctxMenu.style.display = 'none'; });
+    document.addEventListener('contextmenu', e => {
+      if (!e.target.closest('#signal-table tbody')) ctxMenu.style.display = 'none';
+    });
+
+    // 初始化
+    renderBlockedPills();
+    fetchData();
+    autoRefreshTimer = setInterval(fetchData, 15000); // 15秒轮询
+  </script>
+</body>
+</html>
