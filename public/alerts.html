@@ -255,6 +255,7 @@
         </ul>
     </div>
 
+    <script src="/js/api-fetch.js"></script>
     <script>
         const NAV_STATE_KEY = 'rememberedFilterUrls';
         const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/abnormal-trades','/boundary-alerts','/oscillator-screener','/l2-alerts','/large-orders','/volatility','/alerts','/volume-alerts','/volume-surge']);
@@ -418,6 +419,14 @@
         async function loadAlerts() {
             try {
                 const response = await fetch('/api/alerts?limit=50');
+                if (response.status === 503) {
+                    const body = await response.json().catch(() => ({}));
+                    const retryAfter = Number(body.retry_after || 5) * 1000;
+                    document.getElementById('alerts-list').innerHTML =
+                        `<li class="loading" style="color:#ffd666;">&#9203; ${body.message || '服务器初始化中...'}</li>`;
+                    setTimeout(loadAlerts, retryAfter);
+                    return;
+                }
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }

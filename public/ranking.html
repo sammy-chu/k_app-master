@@ -167,6 +167,7 @@
     </div>
 </div>
 
+<script src="/js/api-fetch.js"></script>
 <script>
     let currentData   = [];
     let symbolStates  = {};
@@ -498,9 +499,38 @@
         syncFiltersToUrl();
         try {
             const minVol = document.getElementById('min-volume').value;
-            const res = await fetch(`/api/ranking?min_volume=${minVol}`);
+            const apiUrl = `/api/ranking?min_volume=${minVol}`;
+            const cacheKey = makeCacheKey(apiUrl);
+
+            // Stale-While-Revalidate: 先用缓存数据渲染（若有），再后台刷新
+            if (!currentData || currentData.length === 0) {
+                const cached = getCachedData(cacheKey);
+                if (cached && cached.data && cached.data.length > 0) {
+                    currentData = cached.data;
+                    processWarnings(currentData);
+                    updatePinned(currentData);
+                    renderTable();
+                }
+            }
+
+            const res = await fetch(apiUrl);
+            if (res.status === 503) {
+                const body = await res.json().catch(() => ({}));
+                const retryAfter = Number(body.retry_after || 5) * 1000;
+                if (!currentData || currentData.length === 0) {
+                    document.getElementById('content').innerHTML =
+                        `<div class="loading" style="text-align:center;padding:40px;color:#ffd666;">` +
+                        `&#9203; ${body.message || '服务器正在初始化...'}</div>`;
+                }
+                setTimeout(() => { isFetching = false; fetchData(); }, retryAfter);
+                return;
+            }
             if (!res.ok) throw new Error('Network response was not ok');
             currentData = await res.json();
+
+            // 写入缓存
+            setCachedData(cacheKey, currentData);
+
             processWarnings(currentData);
             updatePinned(currentData);
             renderTable();

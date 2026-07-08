@@ -4,8 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>选股器</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+SC:wght@300;400;500&display=swap" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+SC:wght@300;400;500&display=swap"></noscript>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+SC:wght@300;400;500&display=swap');
 
   :root {
     --bg:         #0a0c0f;
@@ -446,6 +449,7 @@
   });
 </script>
 
+<script src="/js/api-fetch.js"></script>
 <script>
   let allData   = [];
   let sortKey   = 'change_pct';
@@ -654,13 +658,35 @@
   async function fetchData(params) {
     const dot = document.getElementById('statusDot');
     const qs  = paramsToQuery(params);
+    const apiUrl = `/api/screener${qs ? '?'+qs : ''}`;
+    const cacheKey = makeCacheKey(apiUrl);
+
+    // Stale-While-Revalidate: 先用缓存渲染
+    if (!allData || allData.length === 0) {
+      const cached = getCachedData(cacheKey);
+      if (cached && cached.data && cached.data.length > 0) {
+        allData = cached.data;
+        maxVol  = allData.reduce((m,r) => Math.max(m, Number(r.total_volume)||0), 1);
+        render();
+      }
+    }
+
     try {
       const [screenerRes] = await Promise.all([
-        fetch(`/api/screener${qs ? '?'+qs : ''}`),
+        fetch(apiUrl),
         fetchOrderData(),
       ]);
+      if (screenerRes.status === 503) {
+        const body = await screenerRes.json().catch(() => ({}));
+        const retryAfter = Number(body.retry_after || 5) * 1000;
+        dot.className = 'status-dot';
+        document.getElementById('lastUpdate').textContent = body.message || '初始化中...';
+        setTimeout(() => fetchData(params), retryAfter);
+        return;
+      }
       if (!screenerRes.ok) throw new Error(screenerRes.status);
       allData = await screenerRes.json();
+      setCachedData(cacheKey, allData);
       maxVol  = allData.reduce((m,r) => Math.max(m, Number(r.total_volume)||0), 1);
       dot.className = 'status-dot live';
       document.getElementById('lastUpdate').textContent =

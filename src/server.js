@@ -9,6 +9,16 @@ const ConfigManager = require('./config-manager');
 const app = express();
 app.use(compression());
 
+// ══════════════════════════════════════════════════════════════
+// [PERF] 就绪状态标记：冷启动完成前 API 返回 503
+// ══════════════════════════════════════════════════════════════
+let serverReady = false;
+
+// 健康检查端点（不受就绪门控）
+app.get('/api/health', (req, res) => {
+  res.json({ ready: serverReady, uptime: process.uptime() });
+});
+
 // Enable CORS for production and development
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', process.env.ALLOWED_ORIGIN || '*');
@@ -18,6 +28,19 @@ app.use((req, res, next) => {
     return res.status(200).end();
   }
   next();
+});
+
+// [PERF] 就绪门控中间件：数据 API 在冷启动完成前返回 503 + Retry-After
+app.use((req, res, next) => {
+  if (serverReady || !req.path.startsWith('/api/') || req.path === '/api/health') {
+    return next();
+  }
+  res.set('Retry-After', '5');
+  return res.status(503).json({
+    error: 'server_warming_up',
+    message: '服务器正在初始化数据缓存，请稍候...',
+    retry_after: 5,
+  });
 });
 
 // 主连接池
@@ -43,13 +66,14 @@ pool.on('error', (err) => {
 });
 
 // [FIX 1] 独立连接池，专供 PriceWindow、PriceCache 和 QuoteCache
+// [PERF] max 从 10 提升到 15，支持并行冷启动期间更高并发
 const pricePool = new Pool({
   host: process.env.PGHOST || 'localhost',
   port: Number(process.env.PGPORT || 5432),
   database: process.env.PGDATABASE || 'ppro8_market_data',
   user: process.env.PGUSER || 'postgres',
   password: process.env.PGPASSWORD || 'postgres',
-  max: 10,
+  max: 15,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 30000,  // 启动期连接排队，从10s延长到30s
   statement_timeout: 15000,
@@ -67,6 +91,11 @@ pricePool.on('error', (err) => {
 const config = new ConfigManager(pool);
 
 async function ensureTables() {
+  // [PERF] 跳过 DDL 检查：表结构已稳定，仅首次部署或显式传入 ENSURE_TABLES=1 时执行
+  if (process.env.ENSURE_TABLES !== '1') {
+    console.log('[ensureTables] Skipped (set ENSURE_TABLES=1 to run DDL checks)');
+    return;
+  }
   const client = await pool.connect();
   try {
     await client.query('SET search_path TO ' + pgSchema);
@@ -3916,66 +3945,65 @@ function startAlertMonitor() {
     }
   };
 
-  // ── 启动顺序说明 ──────────────────────────────────────────────────────────
-  // 各任务按连接池和查询重量分组，错开首次执行时间，避免启动期主池连接被同时抢占：
-  //
-  //  t=0s    : PriceMonitor、PriceCache冷启动、PriceWindow、Window10m（pricePool）
-  //  t=5s    : Window30m冷启动（pricePool）
-  //  t=15s   : QuoteCache冷启动（pricePool，已有延迟）
-  //  t=20s   : OrderBookCache [DISABLED]（v1接口无消费方，停用以释放pricePool连接）
-  //  t=0s    : DailySummaryUpdater（主池，60s任务，先启动）
-  //  t=30s   : IntradayAvgVol 首次立即执行 + 循环（主池，60s任务）
-  //  t=45s   : IntradayVolWriter [DISABLED]（已由 orderbook_processor_bl.py 负责）
-  //  t=0s    : VolumeMonitor（主池，300s任务）
-  //  t=60s   : HillMonitor（主池，300s任务，延迟1分钟）
-  //  t=120s  : VolumeSurge（主池，300s任务，延迟2分钟）
+  // ── 启动顺序说明（优化版：并行冷启动）────────────────────────────────────
+  // 关键改动：
+  //  1. warmUpPriceCache、initQuoteCache、updateWindow10m、updateWindow30m 并行执行
+  //  2. RankingCache 不再等待 warmUpPriceCache 完成，立即启动（使用 ohlc_snapshot/last_price 数据）
+  //  3. QuoteCache 不再延迟15s，与其他冷启动任务同时执行
+  //  4. Window30m 不再延迟5s，直接并行
+  //  总启动时间从 ~60s 降至 ~15-20s（取决于最慢的单个查询）
   // ──────────────────────────────────────────────────────────────────────────
 
-  // ── t=0s：pricePool 任务，立即启动 ───────────────────────────────────────
+  // ── 并行冷启动：所有重型预热查询同时执行 ─────────────────────────────────
+  console.log(`[ColdStart] Parallel warm-up starting...`);
+  const coldStartTime = Date.now();
+
+  Promise.all([
+    warmUpPriceCache().then(() => console.log(`[ColdStart] PriceCache done in ${Date.now() - coldStartTime}ms`)),
+    initQuoteCache().then(() => console.log(`[ColdStart] QuoteCache done in ${Date.now() - coldStartTime}ms`)),
+    updateWindow10m().then(() => console.log(`[ColdStart] Window10m done in ${Date.now() - coldStartTime}ms`)),
+    updateWindow30m().then(() => console.log(`[ColdStart] Window30m done in ${Date.now() - coldStartTime}ms`)),
+    refreshRankingCache().then(() => console.log(`[ColdStart] RankingCache done in ${Date.now() - coldStartTime}ms`)),
+    updatePrice30mCache().then(() => console.log(`[ColdStart] Price30mCache done in ${Date.now() - coldStartTime}ms`)),
+  ]).then(() => {
+    serverReady = true;
+    console.log(`[ColdStart] All warm-up complete in ${Date.now() - coldStartTime}ms — server ready`);
+  }).catch(err => {
+    // 即使部分失败也标记就绪，让增量更新接管
+    serverReady = true;
+    console.error(`[ColdStart] Warm-up had errors (non-fatal):`, err.message);
+  });
+
+  // ── 循环任务：冷启动后立即开始周期性刷新 ─────────────────────────────────
   console.log(`[ALERT monitor] starting, interval=30000ms, threshold=${(ALERT_THRESHOLD_PCT * 100).toFixed(1)}%`);
   runScan('PriceMonitor', scanAndInsertAlerts, 30000);
 
   console.log(`[PriceWindow] starting, interval=10s`);
-  console.log(`[PriceCache] warming up...`);
-  warmUpPriceCache().then(() => {
-    runScan('RankingCache', refreshRankingCache, 10000);
-  });
   runScan('PriceCache', updatePriceCache, 10000);
   updatePriceWindow();
   runScan('PriceWindow', updatePriceWindow, 10000);
 
+  // RankingCache：不再等待 warmUpPriceCache，首次已在并行冷启动中完成
+  runScan('RankingCache', refreshRankingCache, 10000);
+
   console.log(`[Window10m] starting, interval=10s`);
-  updateWindow10m();
   runScan('Window10m', updateWindow10m, 10000);
 
-  // ── t=12s：BoundaryAlerts（纯内存，10s，在 Window10m 刷新后执行）──────────
+  console.log(`[Window30m] starting, interval=10s`);
+  runScan('Window30m', updateWindow30m, 10000);
+
+  console.log(`[Price30mCache] starting, interval=60s`);
+  runScan('Price30mCache', updatePrice30mCache, 60000);
+
+  console.log(`[QuoteCache] starting, interval=10s`);
+  runScan('QuoteCache', updateQuoteCache, 10000);
+
+  // ── t=12s：BoundaryAlerts（纯内存，10s，在 Window10m 首次刷新后执行）──────
   setTimeout(() => {
     console.log(`[BoundaryAlerts] starting, interval=10s`);
     scanBoundaryAlerts();
     runScan('BoundaryAlerts', scanBoundaryAlerts, 10000);
   }, 12000);
-
-  // ── t=5s：Window30m（pricePool，延迟5s避开 Window10m 启动瞬间）────────────
-  setTimeout(() => {
-    console.log(`[Window30m] starting, interval=10s`);
-    updateWindow30m();
-    runScan('Window30m', updateWindow30m, 10000);
-  }, 5000);
-
-  // ── t=8s：Price30mCache（精确30分钟基准价，每60秒更新）─────────────────────
-  setTimeout(() => {
-    console.log(`[Price30mCache] starting, interval=60s`);
-    updatePrice30mCache();
-    runScan('Price30mCache', updatePrice30mCache, 60000);
-  }, 8000);
-
-  // ── t=15s：QuoteCache（已有延迟，保持不变）────────────────────────────────
-  console.log(`[QuoteCache] cold-start initializing in 15s...`);
-  setTimeout(() => {
-    initQuoteCache().then(() => {
-      runScan('QuoteCache', updateQuoteCache, 10000);
-    });
-  }, 15000);
 
   // ── t=20s：OrderBookCache [DISABLED] ─────────────────────────────────────
   // /api/screener-large-orders（v1）无页面消费，v2已改用 l2_alert_history_bl 直查
@@ -4272,19 +4300,19 @@ function evaluateScanner(row, scannerType) {
 // GET /api/scanners - Summary of all scanners
 app.get('/api/scanners', async (req, res) => {
   try {
+    // [PERF] 只取每个 symbol 最新一条，避免全表扫描超时
     const { rows } = await pool.query(`
-      WITH target_indicators AS (
-        SELECT *
-        FROM market_data.minute_indicators
-        WHERE trade_date = CURRENT_DATE
-      )
       SELECT 
         li.*, 
         COALESCE(os.volume, ds.total_volume, 0) AS current_total_volume
-      FROM target_indicators li
+      FROM (
+        SELECT DISTINCT ON (symbol) *
+        FROM market_data.minute_indicators
+        WHERE trade_date = CURRENT_DATE
+        ORDER BY symbol, bar_time DESC
+      ) li
       LEFT JOIN market_data.ohlc_snapshot os ON os.symbol = li.symbol AND os.trade_date = CURRENT_DATE
       LEFT JOIN market_data.daily_summary ds ON ds.symbol = li.symbol AND ds.trade_date = CURRENT_DATE
-      ORDER BY li.bar_time DESC
     `);
     
     let breakoutCount = 0;
@@ -4363,19 +4391,20 @@ app.get('/api/scanners/:type', async (req, res) => {
   const limit = parseInt(req.query.limit || '50');
   
   try {
+    // [PERF] 只取每个 symbol 的最新一条指标（DISTINCT ON），避免全表扫描超时
+    // 原查询拉全天所有 bar 导致 statement_timeout，数据量过大
     const { rows } = await pool.query(`
-      WITH target_indicators AS (
-        SELECT *
-        FROM market_data.minute_indicators
-        WHERE trade_date = CURRENT_DATE
-      )
       SELECT 
         li.*, 
         COALESCE(os.volume, ds.total_volume, 0) AS current_total_volume
-      FROM target_indicators li
+      FROM (
+        SELECT DISTINCT ON (symbol) *
+        FROM market_data.minute_indicators
+        WHERE trade_date = CURRENT_DATE
+        ORDER BY symbol, bar_time DESC
+      ) li
       LEFT JOIN market_data.ohlc_snapshot os ON os.symbol = li.symbol AND os.trade_date = CURRENT_DATE
       LEFT JOIN market_data.daily_summary ds ON ds.symbol = li.symbol AND ds.trade_date = CURRENT_DATE
-      ORDER BY li.bar_time DESC
     `);
     
     let items = [];
@@ -4454,6 +4483,7 @@ app.get('/volume-chart',        (req, res) => res.sendFile(path.join(__dirname, 
 app.get('/screener-breakout',   (req, res) => res.sendFile(path.join(__dirname, '../public/screener-breakout.html')));
 app.get('/screener-range',      (req, res) => res.sendFile(path.join(__dirname, '../public/screener-range.html')));
 
+// [PERF] ensureTables 默认跳过（仅 ENSURE_TABLES=1 时执行 DDL），不阻塞 startAlertMonitor
 ensureTables().then(() => {
   startAlertMonitor();
 });
