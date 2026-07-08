@@ -4051,6 +4051,14 @@ function startAlertMonitor() {
     runScan('BoundarySnapshot', writeBoundarySnapshot, 60000);
   }, 58000);
 
+  // ── t=15s：ScannerCache + ScannerPerfect（主池，30s/60s）────────────────
+  setTimeout(() => {
+    console.log(`[ScannerCache] starting, interval=30s`);
+    runScan('ScannerCache', refreshScannerCache, 30000);
+    console.log(`[ScannerPerfect] starting, interval=60s`);
+    runScan('ScannerPerfect', refreshScannerPerfectCache, 60000);
+  }, 15000);
+
   // ── t=0s：VolumeMonitor（主池，300s，立即启动）───────────────────────────
   console.log(`[VolumeMonitor] starting, interval=${VOLUME_SCAN_INTERVAL / 1000}s, ratio>=${VOLUME_RATIO_THRESHOLD}x OR z>=${VOLUME_Z_THRESHOLD}, default_history=${VOLUME_HISTORY_DAYS}d`);
   runScan('VolumeMonitor', scanAllVolumeAlerts, VOLUME_SCAN_INTERVAL);
@@ -4088,9 +4096,13 @@ function startAlertMonitor() {
       price30mCache.clear();
       price30mLastUpdate = 0;
       lastDailySummaryRunAt = null;
+      scannerPerfectCache.BREAKOUT = [];
+      scannerPerfectCache.RANGE = [];
+      scannerCache.rows = [];
       console.log('[StableHistory] cleared for new trading day');
       console.log('[Window30m] cleared for new trading day');
       console.log('[Price30mCache] cleared for new trading day');
+      console.log('[ScannerCache] cleared for new trading day');
       pruneStableSnapshot();
       pruneBoundarySnapshot();
       // initOpenPrice 已改为 runScan 定期补写，跨天自动恢复，无需手动触发
@@ -4297,11 +4309,27 @@ function evaluateScanner(row, scannerType) {
   return { score, conditions };
 }
 
-// GET /api/scanners - Summary of all scanners
-app.get('/api/scanners', async (req, res) => {
+// ══════════════════════════════════════════════════════════════
+// [PERF] Scanner 内存缓存：后台每 30s 刷新，API 直接返回缓存
+// ══════════════════════════════════════════════════════════════
+const scannerCache = {
+  rows: [],            // 最新一条/symbol 的 indicator 行
+  lastRefresh: 0,      // 上次刷新时间戳
+  refreshing: false,   // 防止并发刷新
+};
+
+// 全天满分缓存：存储今日所有 bar 中 score=100 的记录（按时间倒序）
+// 结构: { BREAKOUT: [{symbol, bar_time, close, volume, conditions}, ...], RANGE: [...] }
+const scannerPerfectCache = { BREAKOUT: [], RANGE: [] };
+let scannerPerfectRefreshing = false;
+
+async function refreshScannerCache() {
+  if (scannerCache.refreshing) return;
+  scannerCache.refreshing = true;
+  const client = await pool.connect();
   try {
-    // [PERF] 只取每个 symbol 最新一条，避免全表扫描超时
-    const { rows } = await pool.query(`
+    await client.query('SET statement_timeout = 60000');
+    const { rows } = await client.query(`
       SELECT 
         li.*, 
         COALESCE(os.volume, ds.total_volume, 0) AS current_total_volume
@@ -4314,11 +4342,118 @@ app.get('/api/scanners', async (req, res) => {
       LEFT JOIN market_data.ohlc_snapshot os ON os.symbol = li.symbol AND os.trade_date = CURRENT_DATE
       LEFT JOIN market_data.daily_summary ds ON ds.symbol = li.symbol AND ds.trade_date = CURRENT_DATE
     `);
-    
+    scannerCache.rows = rows;
+    scannerCache.lastRefresh = Date.now();
+  } catch (err) {
+    console.error('[ScannerCache] Refresh failed:', err.message);
+  } finally {
+    await client.query('SET statement_timeout = 0').catch(() => {});
+    client.release();
+    scannerCache.refreshing = false;
+  }
+}
+
+// 全天满分扫描：拉取今日所有 bar，评估后只保留 score=100 的记录
+async function refreshScannerPerfectCache() {
+  if (scannerPerfectRefreshing) return;
+  scannerPerfectRefreshing = true;
+  const client = await pool.connect();
+  try {
+    await client.query('SET statement_timeout = 90000');
+    const { rows } = await client.query(`
+      SELECT 
+        li.*, 
+        COALESCE(os.volume, ds.total_volume, 0) AS current_total_volume
+      FROM market_data.minute_indicators li
+      LEFT JOIN market_data.ohlc_snapshot os ON os.symbol = li.symbol AND os.trade_date = CURRENT_DATE
+      LEFT JOIN market_data.daily_summary ds ON ds.symbol = li.symbol AND ds.trade_date = CURRENT_DATE
+      WHERE li.trade_date = CURRENT_DATE
+      ORDER BY li.bar_time DESC
+    `);
+
+    const breakoutItems = [];
+    const rangeItems = [];
+
+    for (const row of rows) {
+      const bEval = evaluateScanner(row, 'BREAKOUT');
+      if (bEval.score >= 100) {
+        breakoutItems.push({
+          symbol: row.symbol,
+          signal: {
+            score: bEval.score,
+            type: 'BREAKOUT',
+            bar_time: row.bar_time,
+            stage: 'WATCH'
+          },
+          indicators: {
+            close: row.close != null ? parseFloat(row.close) : null,
+            volume: row.current_total_volume != null ? parseFloat(row.current_total_volume) : null,
+            atr10: row.atr10 != null ? parseFloat(row.atr10) : null,
+            atr30: row.atr30 != null ? parseFloat(row.atr30) : null,
+            slope10: row.slope10 != null ? parseFloat(row.slope10) : null,
+            range10: row.range10 != null ? parseFloat(row.range10) : null,
+            hh20: row.hh20 != null ? parseFloat(row.hh20) : null,
+            ll20: row.ll20 != null ? parseFloat(row.ll20) : null,
+            up_count20: row.up_count20 != null ? parseInt(row.up_count20) : null,
+            dn_count20: row.dn_count20 != null ? parseInt(row.dn_count20) : null
+          },
+          conditions: bEval.conditions
+        });
+      }
+
+      const rEval = evaluateScanner(row, 'RANGE');
+      if (rEval.score >= 100) {
+        rangeItems.push({
+          symbol: row.symbol,
+          signal: {
+            score: rEval.score,
+            type: 'RANGE',
+            bar_time: row.bar_time,
+            stage: 'A'
+          },
+          indicators: {
+            close: row.close != null ? parseFloat(row.close) : null,
+            volume: row.current_total_volume != null ? parseFloat(row.current_total_volume) : null,
+            atr10: row.atr10 != null ? parseFloat(row.atr10) : null,
+            atr30: row.atr30 != null ? parseFloat(row.atr30) : null,
+            slope10: row.slope10 != null ? parseFloat(row.slope10) : null,
+            range10: row.range10 != null ? parseFloat(row.range10) : null,
+            hh20: row.hh20 != null ? parseFloat(row.hh20) : null,
+            ll20: row.ll20 != null ? parseFloat(row.ll20) : null,
+            up_count20: row.up_count20 != null ? parseInt(row.up_count20) : null,
+            dn_count20: row.dn_count20 != null ? parseInt(row.dn_count20) : null
+          },
+          conditions: rEval.conditions
+        });
+      }
+    }
+
+    // 已按 bar_time DESC 排序（SQL ORDER BY），直接使用
+    scannerPerfectCache.BREAKOUT = breakoutItems;
+    scannerPerfectCache.RANGE = rangeItems;
+    console.log(`[ScannerPerfect] Refreshed: BREAKOUT=${breakoutItems.length}, RANGE=${rangeItems.length} perfect bars from ${rows.length} total`);
+  } catch (err) {
+    console.error('[ScannerPerfect] Refresh failed:', err.message);
+  } finally {
+    await client.query('SET statement_timeout = 0').catch(() => {});
+    client.release();
+    scannerPerfectRefreshing = false;
+  }
+}
+
+// GET /api/scanners - Summary of all scanners
+app.get('/api/scanners', async (req, res) => {
+  try {
+    const rows = scannerCache.rows;
+    if (rows.length === 0) {
+      // 缓存为空，尝试即时刷新一次
+      await refreshScannerCache();
+    }
+
     let breakoutCount = 0;
     let rangeCount = 0;
     
-    for (const row of rows) {
+    for (const row of scannerCache.rows) {
       if (evaluateScanner(row, 'BREAKOUT').score >= 70) breakoutCount++;
       if (evaluateScanner(row, 'RANGE').score >= 70) rangeCount++;
     }
@@ -4384,32 +4519,34 @@ app.get('/api/scanners/:type/diagnose', async (req, res) => {
   }
 });
 
-// GET /api/scanners/:type - Detail of a specific scanner
+// GET /api/scanners/:type - Detail of a specific scanner (from cache)
 app.get('/api/scanners/:type', async (req, res) => {
   const scannerType = req.params.type.toUpperCase();
   const minScore = parseInt(req.query.min_score || '70');
-  const limit = parseInt(req.query.limit || '50');
+  const limit = Math.min(parseInt(req.query.limit || '50'), 200);
   
   try {
-    // [PERF] 只取每个 symbol 的最新一条指标（DISTINCT ON），避免全表扫描超时
-    // 原查询拉全天所有 bar 导致 statement_timeout，数据量过大
-    const { rows } = await pool.query(`
-      SELECT 
-        li.*, 
-        COALESCE(os.volume, ds.total_volume, 0) AS current_total_volume
-      FROM (
-        SELECT DISTINCT ON (symbol) *
-        FROM market_data.minute_indicators
-        WHERE trade_date = CURRENT_DATE
-        ORDER BY symbol, bar_time DESC
-      ) li
-      LEFT JOIN market_data.ohlc_snapshot os ON os.symbol = li.symbol AND os.trade_date = CURRENT_DATE
-      LEFT JOIN market_data.daily_summary ds ON ds.symbol = li.symbol AND ds.trade_date = CURRENT_DATE
-    `);
-    
+    // min_score=100 时使用全天满分缓存（拉取今日所有 bar 评估的结果）
+    if (minScore >= 100) {
+      const perfectItems = scannerPerfectCache[scannerType] || [];
+      // 已按 bar_time DESC 排序，直接截取
+      const sliced = perfectItems.slice(0, limit);
+      return res.json({
+        scanner: scannerType,
+        timestamp: new Date().toISOString(),
+        count: sliced.length,
+        items: sliced
+      });
+    }
+
+    // min_score < 100 时使用最新一条/symbol 缓存
+    if (scannerCache.rows.length === 0) {
+      await refreshScannerCache();
+    }
+
     let items = [];
     
-    for (const row of rows) {
+    for (const row of scannerCache.rows) {
       const evaluation = evaluateScanner(row, scannerType);
       if (evaluation.score >= minScore) {
         items.push({

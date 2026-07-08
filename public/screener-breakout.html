@@ -369,14 +369,6 @@
               <input type="number" id="volMax" placeholder="最高" style="width: 100px;" min="0">
             </div>
           </div>
-          <div class="filter-group">
-            <label>时间 (HH:MM)</label>
-            <div class="filter-row">
-              <input type="time" id="timeMin" style="width: 100px; background: #1a1a1a; border: 1px solid #444; color: #ddd; padding: 4px 8px; border-radius: 4px; font-size: 13px;">
-              <span class="filter-sep">—</span>
-              <input type="time" id="timeMax" style="width: 100px; background: #1a1a1a; border: 1px solid #444; color: #ddd; padding: 4px 8px; border-radius: 4px; font-size: 13px;">
-            </div>
-          </div>
           <div class="filter-group" style="min-width: 200px;">
             <label>屏蔽股票 (逗号分隔或回车)</label>
             <div class="filter-row">
@@ -574,8 +566,6 @@
       document.getElementById('priceMax').value = '';
       document.getElementById('volMin').value = '';
       document.getElementById('volMax').value = '';
-      document.getElementById('timeMin').value = '';
-      document.getElementById('timeMax').value = '';
       applyFilter();
     }
 
@@ -584,13 +574,10 @@
       const pMax = document.getElementById('priceMax').value;
       const vMin = document.getElementById('volMin').value;
       const vMax = document.getElementById('volMax').value;
-      const tMin = document.getElementById('timeMin').value;
-      const tMax = document.getElementById('timeMax').value;
       
       const pills = [];
       if (pMin || pMax) pills.push(`<span class="filter-pill">价: ${pMin||'0'} - ${pMax||'∞'}</span>`);
       if (vMin || vMax) pills.push(`<span class="filter-pill">量: ${vMin||'0'} - ${vMax||'∞'}</span>`);
-      if (tMin || tMax) pills.push(`<span class="filter-pill">时: ${tMin||'00:00'} - ${tMax||'23:59'}</span>`);
       
       document.getElementById('filterPills').innerHTML = pills.join('');
     }
@@ -600,24 +587,12 @@
       const pMax = parseFloat(document.getElementById('priceMax').value);
       const vMin = parseFloat(document.getElementById('volMin').value);
       const vMax = parseFloat(document.getElementById('volMax').value);
-      const tMin = document.getElementById('timeMin').value;
-      const tMax = document.getElementById('timeMax').value;
 
       updateFilterPills();
 
       const filtered = allItems.filter(item => {
         if (blockedStocks.includes(item.symbol)) return false;
         
-        const sig = item.signal || {};
-
-        // 时间过滤 (提取 HH:MM 格式进行字典序比较)
-        if (sig.bar_time && (tMin || tMax)) {
-          const d = new Date(sig.bar_time);
-          const hhmm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-          if (tMin && hhmm < tMin) return false;
-          if (tMax && hhmm > tMax) return false;
-        }
-
         const ind = item.indicators || {};
         const price = ind.close;
         if (price != null) {
@@ -742,12 +717,13 @@
     async function fetchData() {
       const dot = document.getElementById('status-dot');
       try {
-        const res = await fetch('/api/scanners/BREAKOUT?min_score=100&limit=200');
+        const res = await fetch('/api/scanners/BREAKOUT?min_score=100&limit=50');
         if (!res.ok) throw new Error('Network response was not ok');
         const data = await res.json();
         
         document.getElementById('update-time').textContent = '最后更新: ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
         dot.className = 'status-dot live';
+        // 后端已按 bar_time 倒序返回，直接使用
         allItems = data.items || [];
         applyFilter();
       } catch (err) {
