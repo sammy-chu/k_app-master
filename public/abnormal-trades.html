@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>异常成交</title>
@@ -459,6 +458,8 @@
       loading: false,
       filtersOpen: true
     };
+    const NAV_STATE_KEY = 'rememberedFilterUrls';
+    const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/oscillator-screener','/abnormal-trades']);
 
     const columnsByMode = {
       intra: [
@@ -604,6 +605,8 @@
         else url.searchParams.delete(key);
       });
       window.history.replaceState({}, '', url);
+      rememberCurrentUrl();
+      hydrateRememberedNavLinks();
     }
 
     function loadFromUrl() {
@@ -624,6 +627,27 @@
         min_bps: url.searchParams.get('min_bps') || '',
         limit: url.searchParams.get('limit') || '200'
       });
+    }
+    function loadRememberedNavUrls() {
+      try {
+        return JSON.parse(sessionStorage.getItem(NAV_STATE_KEY) || '{}');
+      } catch (_) {
+        return {};
+      }
+    }
+    function hydrateRememberedNavLinks() {
+      const saved = loadRememberedNavUrls();
+      document.querySelectorAll('.nav-links a[href]').forEach(link => {
+        const href = link.getAttribute('href');
+        if (NAV_PERSIST_PATHS.has(href) && saved[href]) link.href = saved[href];
+      });
+    }
+    function rememberCurrentUrl() {
+      const path = window.location.pathname;
+      if (!NAV_PERSIST_PATHS.has(path)) return;
+      const saved = loadRememberedNavUrls();
+      saved[path] = `${path}${window.location.search}${window.location.hash}`;
+      sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(saved));
     }
 
     function renderFilterPills() {
@@ -705,7 +729,7 @@
     function buildApiUrl() {
       const filters = readFilters();
       state.limit = Number(filters.limit || 200) || 200;
-      const url = new URL(state.mode === 'intra' ? '/api/intra-spread-trades' : '/api/slip-trades', window.API_BASE || window.location.origin);
+      const url = new URL(state.mode === 'intra' ? '/api/intra-spread-trades' : '/api/slip-trades', window.location.origin);
       Object.entries(filters).forEach(([key, value]) => {
         if (!value) return;
         if (state.mode !== 'slip' && key === 'direction') return;
@@ -822,6 +846,8 @@
     }
 
     loadFromUrl();
+    rememberCurrentUrl();
+    hydrateRememberedNavLinks();
     bindEvents();
     renderMode();
     renderPageInfo();

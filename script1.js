@@ -1,230 +1,4 @@
-<!doctype html>
-<html>
-  <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
-    <meta charset="utf-8" />
-    <title>K Chart MVP</title>
-    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-    <style>
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        margin: 0;
-        padding: 20px;
-        background-color: #1a1a1a;
-        color: #ddd;
-      }
-      #chart { 
-        width: 100%; 
-        height: 500px; 
-        margin-top: 20px;
-        border: 1px solid #333;
-        border-radius: 8px 8px 0 0;
-        border-bottom: none;
-        position: relative;
-      }
-      #volume-chart {
-        width: 100%;
-        height: 150px;
-        border: 1px solid #333;
-        border-radius: 0;
-        border-top: 1px solid #444;
-        position: relative;
-        border-bottom: none;
-      }
-      #macd-chart {
-        width: 100%;
-        height: 150px;
-        border: 1px solid #333;
-        border-radius: 0 0 8px 8px;
-        border-top: 1px solid #444;
-        position: relative;
-      }
-      #rsi-chart {
-        width: 100%;
-        height: 150px;
-        border: 1px solid #333;
-        border-radius: 0 0 8px 8px;
-        border-top: 1px solid #444;
-        position: relative;
-        border-bottom: 1px solid #333;
-      }
-      #volume-tooltip {
-        position: absolute;
-        display: none;
-        padding: 8px;
-        box-sizing: border-box;
-        font-size: 12px;
-        text-align: left;
-        z-index: 1000;
-        pointer-events: none;
-        border: 1px solid #444;
-        border-radius: 4px;
-        background: rgba(0, 0, 0, 0.9);
-        color: #ddd;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.5);
-      }
-      #macd-tooltip {
-        position: absolute;
-        display: none;
-        padding: 8px;
-        box-sizing: border-box;
-        font-size: 12px;
-        text-align: left;
-        z-index: 1000;
-        pointer-events: none;
-        border: 1px solid #444;
-        border-radius: 4px;
-        background: rgba(0, 0, 0, 0.9);
-        color: #ddd;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.5);
-      }
-      #rsi-tooltip {
-        position: absolute;
-        display: none;
-        padding: 8px;
-        box-sizing: border-box;
-        font-size: 12px;
-        text-align: left;
-        z-index: 1000;
-        pointer-events: none;
-        border: 1px solid #444;
-        border-radius: 4px;
-        background: rgba(0, 0, 0, 0.9);
-        color: #ddd;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.5);
-      }
-      #toolbar { 
-        display: flex; 
-        gap: 12px; 
-        margin: 20px 0;
-        align-items: center;
-        flex-wrap: wrap;
-      }
-      #toolbar input, #toolbar button {
-        padding: 8px 12px;
-        border: 1px solid #555;
-        border-radius: 4px;
-        background-color: #2a2a2a;
-        color: #ddd;
-        font-size: 14px;
-      }
-      .ma-toggle {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        margin-left: 12px;
-        cursor: pointer;
-        user-select: none;
-      }
-      .ma-toggle input {
-        margin: 0;
-        cursor: pointer;
-      }
-      .ma-toggle span {
-        font-size: 14px;
-        font-weight: 500;
-      }
-      #toolbar input:focus {
-        outline: none;
-        border-color: #007acc;
-      }
-      #toolbar button {
-        background-color: #007acc;
-        color: white;
-        cursor: pointer;
-        transition: background-color 0.2s;
-      }
-      #toolbar button:hover {
-        background-color: #005a9e;
-      }
-      #toolbar button:disabled {
-        background-color: #555;
-        cursor: not-allowed;
-      }
-      #status {
-        margin-top: 10px;
-        font-size: 14px;
-        color: #888;
-      }
-      .error {
-        color: #ff6b6b;
-      }
-      .success {
-        color: #51cf66;
-      }
-      h1 {
-        margin: 0 0 20px 0;
-        color: #fff;
-      }
-    </style>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-  </head>
-  <body>
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-      <h1>K Chart MVP - 股票K线图</h1>
-      <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-        <a href="/" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">📈 K线图�?/a>
-        <a href="/alerts" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">🚨 价格提醒</a>
-        <a href="/volume-alerts" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">📊 成交量提�?/a>
-        <a href="/hills" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">⛰️ 山丘扫描</a>
-        <a href="/hill-alerts" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">⛰️ 山丘提醒</a>
-        <a href="/ranking" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">涨跌排名</a>
-        <a href="/l2-alerts" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">L2大单</a>
-        <a href="/screener" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">选股�?/a>
-        <a href="/stable-screener" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">稳定选股</a>
-        <a href="/swing-screener" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">波段扫描</a>
-        <a href="/oscillator-screener" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">震荡选股</a>
-        <a href="/boundary-alerts" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">边界预警</a>
-        <a href="/active-trading" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">活跃主买</a>
-        <a href="/abnormal-trades" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">异常成交</a>
-        <a href="/screener-breakout" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">突破监控 <span id="nav-breakout-count" style="font-weight:bold;color:#ff6b6b"></span></a>
-        <a href="/screener-range" style="color: #007acc; text-decoration: none; padding: 8px 16px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s;">震荡监控 <span id="nav-range-count" style="font-weight:bold;color:#ff6b6b"></span></a>
-      </div>
-    </div>
-    <div id="toolbar">
-      <input id="symbol" placeholder="输入symbol，如 AMD.BL" value="AMD.BL" />
-      <input id="date" type="date" />
-      <button id="load">加载数据</button>
-      
-      <!-- MA Toggles -->
-      <label class="ma-toggle" style="color: #E6E6FA">
-        <input type="checkbox" id="toggle-ma5" checked> MA5
-      </label>
-      <label class="ma-toggle" style="color: #FFFF00">
-        <input type="checkbox" id="toggle-ma10" checked> MA10
-      </label>
-      <label class="ma-toggle" style="color: #FF00FF">
-        <input type="checkbox" id="toggle-ma20" checked> MA20
-      </label>
 
-      <!-- EMA Toggles -->
-      <label class="ma-toggle" style="color: #2962FF">
-        <input type="checkbox" id="toggle-ema12"> EMA12
-      </label>
-      <label class="ma-toggle" style="color: #FF6D00">
-        <input type="checkbox" id="toggle-ema26"> EMA26
-      </label>
-
-      <!-- Chart Toggles -->
-      <div style="width: 1px; height: 20px; background: #444; margin: 0 8px;"></div>
-      <label class="ma-toggle">
-        <input type="checkbox" id="toggle-volume" checked> Volume
-      </label>
-      <label class="ma-toggle">
-        <input type="checkbox" id="toggle-macd" checked> MACD
-      </label>
-      <label class="ma-toggle">
-        <input type="checkbox" id="toggle-rsi"> RSI
-      </label>
-
-      <div id="status"></div>
-    </div>
-    <div id="chart"></div>
-    <div id="volume-chart"></div>
-    <div id="macd-chart"></div>
-    <div id="rsi-chart" style="display: none;"></div>
-
-    <script>
       // 等待库加载完�?      function initChart() {
         if (typeof LightweightCharts === 'undefined') {
           setTimeout(initChart, 100);
@@ -864,7 +638,7 @@
             showStatus('正在加载数据...', 'info');
           }
           
-          const res = await fetch(window.API_BASE + `/api/ohlcv?symbol=${encodeURIComponent(symbol)}&date=${encodeURIComponent(date)}`);
+          const res = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(symbol)}&date=${encodeURIComponent(date)}`);
           
           if (!res.ok) {
             throw new Error(`HTTP ${res.status}: ${res.statusText}`);
@@ -1098,12 +872,23 @@
       
       } // 结束 initChart 函数
       
+      // Fetch scanner counts
+      async function updateScannerCounts() {
+        try {
+          const res = await fetch('/api/scanners');
+          if (res.ok) {
+            const data = await res.json();
+            const breakout = data.find(d => d.type === 'BREAKOUT');
+            const range = data.find(d => d.type === 'RANGE');
+            if (breakout) document.getElementById('nav-breakout-count').textContent = `(${breakout.count})`;
+            if (range) document.getElementById('nav-range-count').textContent = `(${range.count})`;
+          }
+        } catch (e) {
+          console.error('Failed to fetch scanner counts', e);
+        }
+      }
+
       // 启动图表初始�?      initChart();
-    </script>
-  </body>
-</html>
-
-
-<!-- ���԰�ȫ��������� -->
-
-<!-- ? ��ȫ��������ɣ�IP ��������Ч -->
+      updateScannerCounts();
+      setInterval(updateScannerCounts, 15000);
+    

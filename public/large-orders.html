@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
     <meta charset="UTF-8">
     <title>大单监控筛选</title>
     <style>
@@ -123,7 +122,77 @@
         let fetchTimer;
         let displayedStocks = []; // 前端状态队列，保存已渲染的 symbol
         let expandedSymbols = new Set(); // 记录展开状态的 symbol
-        
+        const NAV_STATE_KEY = 'rememberedFilterUrls';
+        const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/abnormal-trades','/boundary-alerts','/oscillator-screener','/l2-alerts','/large-orders','/volatility','/alerts','/volume-alerts','/volume-surge']);
+
+        function readFiltersFromDom() {
+            return {
+                min_order_vol: document.getElementById('min-order-vol').value.trim(),
+                min_total_vol: document.getElementById('min-total-vol').value.trim(),
+                max_total_vol: document.getElementById('max-total-vol').value.trim(),
+                time_window: document.getElementById('time-window').value,
+                side: document.getElementById('side-filter').value,
+                min_price: document.getElementById('min-price').value.trim(),
+                max_price: document.getElementById('max-price').value.trim(),
+                sort_method: document.getElementById('sort-method').value,
+                display_limit: document.getElementById('display-limit').value
+            };
+        }
+        function writeFiltersToDom(filters) {
+            document.getElementById('min-order-vol').value = filters.min_order_vol || '';
+            document.getElementById('min-total-vol').value = filters.min_total_vol || '';
+            document.getElementById('max-total-vol').value = filters.max_total_vol || '';
+            document.getElementById('time-window').value = filters.time_window || '5';
+            document.getElementById('side-filter').value = filters.side || 'all';
+            document.getElementById('min-price').value = filters.min_price || '';
+            document.getElementById('max-price').value = filters.max_price || '';
+            document.getElementById('sort-method').value = filters.sort_method || 'time';
+            document.getElementById('display-limit').value = filters.display_limit || '20';
+        }
+        function syncFiltersToUrl() {
+            const url = new URL(window.location.href);
+            Object.entries(readFiltersFromDom()).forEach(([key, value]) => {
+                url.searchParams.delete(key);
+                if (value && !(key === 'time_window' && value === '5') && !(key === 'side' && value === 'all') && !(key === 'sort_method' && value === 'time') && !(key === 'display_limit' && value === '20')) {
+                    url.searchParams.set(key, value);
+                }
+            });
+            window.history.replaceState({}, '', url);
+            rememberCurrentUrl();
+            hydrateRememberedNavLinks();
+        }
+        function restoreFiltersFromUrl() {
+            const params = new URLSearchParams(window.location.search);
+            writeFiltersToDom({
+                min_order_vol: params.get('min_order_vol') || '',
+                min_total_vol: params.get('min_total_vol') || '',
+                max_total_vol: params.get('max_total_vol') || '',
+                time_window: params.get('time_window') || '',
+                side: params.get('side') || '',
+                min_price: params.get('min_price') || '',
+                max_price: params.get('max_price') || '',
+                sort_method: params.get('sort_method') || '',
+                display_limit: params.get('display_limit') || ''
+            });
+        }
+        function loadRememberedNavUrls() {
+            try { return JSON.parse(sessionStorage.getItem(NAV_STATE_KEY) || '{}'); } catch (_) { return {}; }
+        }
+        function hydrateRememberedNavLinks() {
+            const saved = loadRememberedNavUrls();
+            document.querySelectorAll('.nav-links a[href]').forEach(link => {
+                const href = link.getAttribute('href');
+                if (NAV_PERSIST_PATHS.has(href) && saved[href]) link.href = saved[href];
+            });
+        }
+        function rememberCurrentUrl() {
+            const path = window.location.pathname;
+            if (!NAV_PERSIST_PATHS.has(path)) return;
+            const saved = loadRememberedNavUrls();
+            saved[path] = `${path}${window.location.search}${window.location.hash}`;
+            sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(saved));
+        }
+
         function toggleDetails(symbol) {
             const childRow = document.getElementById('child-row-' + symbol);
             const icon = document.getElementById('toggle-icon-' + symbol);
@@ -141,10 +210,11 @@
         function buildUrl() {
             const minOrderVol = document.getElementById('min-order-vol').value || 0;
             const timeWindow = document.getElementById('time-window').value || 5;
-            return (window.API_BASE || '') + `/api/large-orders-screener?min_order_volume=${minOrderVol}&time_window_mins=${timeWindow}`;
+            return `/api/large-orders-screener?min_order_volume=${minOrderVol}&time_window_mins=${timeWindow}`;
         }
 
         async function fetchData() {
+            syncFiltersToUrl();
             try {
                 const res = await fetch(buildUrl());
                 if (!res.ok) throw new Error('Network response error');
@@ -389,23 +459,8 @@
         }
 
         // 绑定事件
-        const LS_KEY_LO = 'large_orders_filters';
-        const FILTER_IDS_LO = ['min-order-vol','min-total-vol','max-total-vol','time-window','side-filter','min-price','max-price','sort-method','display-limit'];
-        function saveFilters() {
-            const state = {};
-            FILTER_IDS_LO.forEach(id => { const el = document.getElementById(id); if (el) state[id] = el.value; });
-            try { localStorage.setItem(LS_KEY_LO, JSON.stringify(state)); } catch(e) {}
-        }
-        function restoreFilters() {
-            let state;
-            try { state = JSON.parse(localStorage.getItem(LS_KEY_LO)); } catch(e) {}
-            if (!state) return;
-            FILTER_IDS_LO.forEach(id => { const el = document.getElementById(id); if (el && state[id] != null) el.value = state[id]; });
-        }
-
         ['min-order-vol', 'min-total-vol', 'max-total-vol', 'time-window', 'side-filter', 'min-price', 'max-price', 'sort-method', 'display-limit'].forEach(id => {
             document.getElementById(id).addEventListener('change', () => {
-                saveFilters();
                 fetchData();
                 // 重置定时器
                 clearInterval(fetchTimer);
@@ -436,9 +491,14 @@
         });
 
         // 初始加载与自动刷新
-        restoreFilters();
         fetchData();
         fetchTimer = setInterval(fetchData, 1000); // 每 1 秒刷新一次
+    </script>
+    <script>
+        restoreFiltersFromUrl();
+        rememberCurrentUrl();
+        hydrateRememberedNavLinks();
+        fetchData();
     </script>
 </body>
 </html>

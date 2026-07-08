@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>波动筛选器</title>
@@ -456,6 +455,69 @@
   let maxVol    = 1;
   let autoTimer = null;
   const REFRESH_MS = 10000;
+  const FILTER_QUERY_KEYS = ['min_volume','dir','search'];
+  const NAV_STATE_KEY = 'rememberedFilterUrls';
+  const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/oscillator-screener','/abnormal-trades']);
+
+  function readFiltersFromDom() {
+    const filters = {};
+    const minVolume = document.getElementById('minVolume')?.value.trim();
+    const search = document.getElementById('searchInput')?.value.trim().toUpperCase();
+    if (minVolume && minVolume !== '0') filters.min_volume = minVolume;
+    if (dirFilter !== 'all') filters.dir = dirFilter;
+    if (search) filters.search = search;
+    return filters;
+  }
+  function writeFiltersToDom(filters) {
+    const minVolume = document.getElementById('minVolume');
+    const search = document.getElementById('searchInput');
+    if (minVolume) minVolume.value = filters.min_volume || '0';
+    if (search) search.value = filters.search || '';
+    dirFilter = ['up','down'].includes(filters.dir) ? filters.dir : 'all';
+    ['All','Up','Down'].forEach(n =>
+      document.getElementById('btn'+n).classList.toggle('active', dirFilter === n.toLowerCase())
+    );
+  }
+  function syncFiltersToUrl() {
+    const url = new URL(window.location.href);
+    FILTER_QUERY_KEYS.forEach(key => url.searchParams.delete(key));
+    Object.entries(readFiltersFromDom()).forEach(([key, value]) => {
+      if (value) url.searchParams.set(key, value);
+    });
+    window.history.replaceState({}, '', url);
+    rememberCurrentUrl();
+    hydrateRememberedNavLinks();
+  }
+  function restoreFiltersFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const filters = {};
+    FILTER_QUERY_KEYS.forEach(key => {
+      const value = params.get(key);
+      if (value !== null) filters[key] = value;
+    });
+    writeFiltersToDom(filters);
+  }
+  function loadRememberedNavUrls() {
+    try {
+      return JSON.parse(sessionStorage.getItem(NAV_STATE_KEY) || '{}');
+    } catch (_) {
+      return {};
+    }
+  }
+  function hydrateRememberedNavLinks() {
+    const saved = loadRememberedNavUrls();
+    document.querySelectorAll('.nav-links a[href]').forEach(link => {
+      const href = link.getAttribute('href');
+      if (NAV_PERSIST_PATHS.has(href) && saved[href]) link.href = saved[href];
+    });
+  }
+  function rememberCurrentUrl() {
+    const path = window.location.pathname;
+    if (!NAV_PERSIST_PATHS.has(path)) return;
+    const saved = loadRememberedNavUrls();
+    saved[path] = `${path}${window.location.search}${window.location.hash}`;
+    sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(saved));
+  }
 
   function sortBy(key) {
     const cols = ['symbol','last_price','change_pct','change_amount','swing',
@@ -473,14 +535,16 @@
     ['All','Up','Down'].forEach(n =>
       document.getElementById('btn'+n).classList.toggle('active', d === n.toLowerCase())
     );
+    syncFiltersToUrl();
     render();
   }
 
   async function fetchData() {
+    syncFiltersToUrl();
     const minVol = Number(document.getElementById('minVolume').value) || 0;
     const dot = document.getElementById('statusDot');
     try {
-      const res = await fetch(window.API_BASE + `/api/price-swing-screener?min_volume=${minVol}`);
+      const res = await fetch(`/api/price-swing-screener?min_volume=${minVol}`);
       if (!res.ok) throw new Error(res.status);
       allData = await res.json();
       maxVol = allData.reduce((m, r) => Math.max(m, Number(r.total_volume) || 0), 1);
@@ -586,25 +650,19 @@
     else { fetchData(); startAutoRefresh(); }
   });
 
-  const LS_KEY_SWING = 'swing_screener_filters';
-  function saveFilters() {
-    try { localStorage.setItem(LS_KEY_SWING, JSON.stringify({ minVolume: document.getElementById('minVolume').value })); } catch(e) {}
-  }
-  function restoreFilters() {
-    let state;
-    try { state = JSON.parse(localStorage.getItem(LS_KEY_SWING)); } catch(e) {}
-    if (state && state.minVolume != null) document.getElementById('minVolume').value = state.minVolume;
-  }
-
   let debounceTimer;
   document.getElementById('minVolume').addEventListener('input', () => {
     clearTimeout(debounceTimer);
-    saveFilters();
     debounceTimer = setTimeout(fetchData, 600);
   });
 
-  restoreFilters();
-  fetchData();
+  restoreFiltersFromUrl();
+  rememberCurrentUrl();
+  hydrateRememberedNavLinks();
+  const searchInput = document.getElementById('searchInput');
+  fetchData().then(() => {
+    if (searchInput.value.trim()) searchSymbol(searchInput.value);
+  });
   startAutoRefresh();
 
   // ── symbol 搜索（虚拟滚动版）────────────────────────
@@ -612,6 +670,7 @@
   function searchSymbol(raw) {
     const q        = raw.trim().toUpperCase();
     const resultEl = document.getElementById('searchResult');
+    syncFiltersToUrl();
 
     if (!q) { resultEl.textContent = ''; resultEl.className = 'search-result'; return; }
 
@@ -642,16 +701,17 @@
     resultEl.className   = 'search-result found';
   }
 
-  const searchInput = document.getElementById('searchInput');
   searchInput.addEventListener('keydown', e => {
     if (e.key === 'Enter') searchSymbol(searchInput.value);
   });
   searchInput.addEventListener('input', () => {
+    syncFiltersToUrl();
     if (!searchInput.value.trim()) {
       document.getElementById('searchResult').textContent = '';
       document.getElementById('searchResult').className  = 'search-result';
     }
   });
+
 </script>
 </body>
 </html>

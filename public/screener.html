@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>选股器</title>
@@ -464,13 +463,13 @@
                      'ask_l1_vol','ask_l2_vol','ask_l3_vol'];
 
   // ── logic ──
-  function setLogic(l) {
+  function setLogic(l, opts = {}) {
     logic = l;
     document.getElementById('btnAnd').classList.toggle('active', l === 'and');
     document.getElementById('btnAnd').classList.toggle('and',    l === 'and');
     document.getElementById('btnOr').classList.toggle('active',  l === 'or');
     document.getElementById('btnOr').classList.toggle('or',      l === 'or');
-    run();
+    if (!opts.skipRun) run();
   }
 
   // ── params ──
@@ -482,6 +481,14 @@
     ['spreadMin','spread_min'],['spreadMax','spread_max'],
   ];
   const INPUT_MAP = Object.fromEntries(FIELDS.map(([id, k]) => [id, k]));
+  const EXTRA_FILTER_FIELDS = [
+    ['orderVolMin','order_vol_min'],
+    ['orderVolMax','order_vol_max'],
+    ['orderSide','order_side'],
+  ];
+  const FILTER_QUERY_KEYS = [...FIELDS.map(([, key]) => key), ...EXTRA_FILTER_FIELDS.map(([, key]) => key), 'logic'];
+  const NAV_STATE_KEY = 'rememberedFilterUrls';
+  const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/oscillator-screener','/abnormal-trades']);
   const TAG_META  = {
     price_min:    {label:'价格 ≥',  suffix:''},
     price_max:    {label:'价格 ≤',  suffix:''},
@@ -502,6 +509,73 @@
     });
     p.logic = logic;
     return p;
+  }
+  function readFiltersFromDom() {
+    const filters = {};
+    FIELDS.forEach(([id, key]) => {
+      const value = document.getElementById(id).value.trim();
+      if (value !== '') filters[key] = value;
+    });
+    EXTRA_FILTER_FIELDS.forEach(([id, key]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const value = el.value.trim();
+      if (value && !(key === 'order_side' && value === 'any')) filters[key] = value;
+    });
+    if (logic === 'or') filters.logic = logic;
+    return filters;
+  }
+  function writeFiltersToDom(filters) {
+    FIELDS.forEach(([id, key]) => {
+      const el = document.getElementById(id);
+      if (el) el.value = filters[key] || '';
+    });
+    EXTRA_FILTER_FIELDS.forEach(([id, key]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = key === 'order_side' ? (filters[key] || 'any') : (filters[key] || '');
+    });
+    setLogic(filters.logic === 'or' ? 'or' : 'and', { skipRun: true });
+  }
+  function syncFiltersToUrl() {
+    const url = new URL(window.location.href);
+    FILTER_QUERY_KEYS.forEach(key => url.searchParams.delete(key));
+    Object.entries(readFiltersFromDom()).forEach(([key, value]) => {
+      if (value) url.searchParams.set(key, value);
+    });
+    window.history.replaceState({}, '', url);
+    rememberCurrentUrl();
+    hydrateRememberedNavLinks();
+  }
+  function restoreFiltersFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const filters = {};
+    FILTER_QUERY_KEYS.forEach(key => {
+      const value = params.get(key);
+      if (value !== null) filters[key] = value;
+    });
+    writeFiltersToDom(filters);
+  }
+  function loadRememberedNavUrls() {
+    try {
+      return JSON.parse(sessionStorage.getItem(NAV_STATE_KEY) || '{}');
+    } catch (_) {
+      return {};
+    }
+  }
+  function hydrateRememberedNavLinks() {
+    const saved = loadRememberedNavUrls();
+    document.querySelectorAll('.nav-links a[href]').forEach(link => {
+      const href = link.getAttribute('href');
+      if (NAV_PERSIST_PATHS.has(href) && saved[href]) link.href = saved[href];
+    });
+  }
+  function rememberCurrentUrl() {
+    const path = window.location.pathname;
+    if (!NAV_PERSIST_PATHS.has(path)) return;
+    const saved = loadRememberedNavUrls();
+    saved[path] = `${path}${window.location.search}${window.location.hash}`;
+    sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(saved));
   }
   function paramsToQuery(p) {
     return Object.entries(p).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
@@ -568,7 +642,7 @@
     const maxVol = document.getElementById('orderVolMax').value || 0;
     try {
       const qs  = `min_vol=${minVol}&max_vol=${maxVol}`;
-      const res = await fetch(window.API_BASE + `/api/screener-large-orders-v2?${qs}`);
+      const res = await fetch(`/api/screener-large-orders-v2?${qs}`);
       if (!res.ok) throw new Error(res.status);
       orderMap = await res.json();
     } catch(e) {
@@ -582,7 +656,7 @@
     const qs  = paramsToQuery(params);
     try {
       const [screenerRes] = await Promise.all([
-        fetch(window.API_BASE + `/api/screener${qs ? '?'+qs : ''}`),
+        fetch(`/api/screener${qs ? '?'+qs : ''}`),
         fetchOrderData(),
       ]);
       if (!screenerRes.ok) throw new Error(screenerRes.status);
@@ -598,34 +672,12 @@
     }
   }
 
-  const LS_KEY = 'screener_filters';
-
-  function saveFilters() {
-    const state = { logic };
-    FIELDS.forEach(([id]) => { state[id] = document.getElementById(id).value; });
-    state.orderVolMin = document.getElementById('orderVolMin').value;
-    state.orderVolMax = document.getElementById('orderVolMax').value;
-    state.orderSide   = document.getElementById('orderSide').value;
-    try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch(e) {}
-  }
-
-  function restoreFilters() {
-    let state;
-    try { state = JSON.parse(localStorage.getItem(LS_KEY)); } catch(e) {}
-    if (!state) return;
-    if (state.logic) setLogic(state.logic);
-    FIELDS.forEach(([id]) => { if (state[id] != null) document.getElementById(id).value = state[id]; });
-    if (state.orderVolMin != null) document.getElementById('orderVolMin').value = state.orderVolMin;
-    if (state.orderVolMax != null) document.getElementById('orderVolMax').value = state.orderVolMax;
-    if (state.orderSide   != null) document.getElementById('orderSide').value   = state.orderSide;
-  }
-
   function run() {
     updateInputHighlights();
     const params = getParams();
     lastParams = params;
+    syncFiltersToUrl();
     renderTags(params);
-    saveFilters();
     fetchData(params);
   }
 
@@ -769,8 +821,16 @@
   FIELDS.forEach(([id]) => {
     document.getElementById(id).addEventListener('keydown', e => { if (e.key==='Enter') run(); });
   });
+  EXTRA_FILTER_FIELDS.forEach(([id]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', run);
+    el.addEventListener('keydown', e => { if (e.key==='Enter') run(); });
+  });
 
-  restoreFilters();
+  restoreFiltersFromUrl();
+  rememberCurrentUrl();
+  hydrateRememberedNavLinks();
   run();
   startAutoRefresh();
 </script>

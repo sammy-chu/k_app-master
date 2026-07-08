@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>L2 大单历史</title>
@@ -566,7 +565,7 @@
 
     async function refreshVolumeSurge() {
         try {
-            const res = await fetch(window.API_BASE + '/api/volume-surge-today');
+            const res = await fetch('/api/volume-surge-today');
             const data = await res.json();
             data.forEach(s => volumeSurgeSymbols.add(s)); // 只增不减，当日永久
         } catch (e) {
@@ -596,6 +595,98 @@
 
     const LS_KEY = 'sharedBlockedStocks';
     let blockedStocks = new Set(JSON.parse(localStorage.getItem(LS_KEY) || '[]'));
+    const NAV_STATE_KEY = 'rememberedFilterUrls';
+    const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/abnormal-trades','/boundary-alerts','/oscillator-screener','/l2-alerts','/large-orders','/volatility','/alerts','/volume-alerts','/volume-surge']);
+
+    function readFiltersFromDom() {
+        return {
+            side: document.getElementById('filter-side')?.value || 'all',
+            trend: document.getElementById('filter-trend')?.value || 'all',
+            time: document.getElementById('filter-time')?.value || '60',
+            symbol: document.getElementById('filter-symbol')?.value.trim().toUpperCase() || '',
+            ratio: document.getElementById('filter-ratio')?.value.trim() || '',
+            min_level: document.getElementById('filter-min-level')?.value.trim() || '',
+            max_level: document.getElementById('filter-max-level')?.value.trim() || '',
+            min_price: document.getElementById('filter-min-price')?.value.trim() || '',
+            max_price: document.getElementById('filter-max-price')?.value.trim() || '',
+            min_volume: document.getElementById('filter-min-volume')?.value.trim() || '',
+            max_volume: document.getElementById('filter-max-volume')?.value.trim() || '',
+            min_trade_vol: document.getElementById('filter-min-trade-vol')?.value.trim() || '',
+            max_trade_vol: document.getElementById('filter-max-trade-vol')?.value.trim() || '',
+            min_abs_change: document.getElementById('filter-min-abs-change')?.value.trim() || '',
+            max_abs_change: document.getElementById('filter-max-abs-change')?.value.trim() || '',
+            max_book_vol: document.getElementById('filter-max-book-vol')?.value.trim() || ''
+        };
+    }
+    function writeFiltersToDom(filters) {
+        document.getElementById('filter-side').value = filters.side || 'all';
+        document.getElementById('filter-trend').value = filters.trend || 'all';
+        document.getElementById('filter-time').value = filters.time || '60';
+        document.getElementById('filter-symbol').value = filters.symbol || '';
+        document.getElementById('filter-ratio').value = filters.ratio || '';
+        document.getElementById('filter-min-level').value = filters.min_level || '';
+        document.getElementById('filter-max-level').value = filters.max_level || '';
+        document.getElementById('filter-min-price').value = filters.min_price || '';
+        document.getElementById('filter-max-price').value = filters.max_price || '';
+        document.getElementById('filter-min-volume').value = filters.min_volume || '';
+        document.getElementById('filter-max-volume').value = filters.max_volume || '';
+        document.getElementById('filter-min-trade-vol').value = filters.min_trade_vol || '';
+        document.getElementById('filter-max-trade-vol').value = filters.max_trade_vol || '';
+        document.getElementById('filter-min-abs-change').value = filters.min_abs_change || '';
+        document.getElementById('filter-max-abs-change').value = filters.max_abs_change || '';
+        document.getElementById('filter-max-book-vol').value = filters.max_book_vol || '';
+    }
+    function syncFiltersToUrl() {
+        const url = new URL(window.location.href);
+        const filters = readFiltersFromDom();
+        Object.keys(filters).forEach(key => url.searchParams.delete(key));
+        Object.entries(filters).forEach(([key, value]) => {
+            if (value && !(key === 'side' && value === 'all') && !(key === 'trend' && value === 'all') && !(key === 'time' && value === '60')) {
+                url.searchParams.set(key, value);
+            }
+        });
+        window.history.replaceState({}, '', url);
+        rememberCurrentUrl();
+        hydrateRememberedNavLinks();
+    }
+    function restoreFiltersFromUrl() {
+        const params = new URLSearchParams(window.location.search);
+        writeFiltersToDom({
+            side: params.get('side') || '',
+            trend: params.get('trend') || '',
+            time: params.get('time') || '',
+            symbol: params.get('symbol') || '',
+            ratio: params.get('ratio') || '',
+            min_level: params.get('min_level') || '',
+            max_level: params.get('max_level') || '',
+            min_price: params.get('min_price') || '',
+            max_price: params.get('max_price') || '',
+            min_volume: params.get('min_volume') || '',
+            max_volume: params.get('max_volume') || '',
+            min_trade_vol: params.get('min_trade_vol') || '',
+            max_trade_vol: params.get('max_trade_vol') || '',
+            min_abs_change: params.get('min_abs_change') || '',
+            max_abs_change: params.get('max_abs_change') || '',
+            max_book_vol: params.get('max_book_vol') || ''
+        });
+    }
+    function loadRememberedNavUrls() {
+        try { return JSON.parse(sessionStorage.getItem(NAV_STATE_KEY) || '{}'); } catch (_) { return {}; }
+    }
+    function hydrateRememberedNavLinks() {
+        const saved = loadRememberedNavUrls();
+        document.querySelectorAll('.nav-links a[href]').forEach(link => {
+            const href = link.getAttribute('href');
+            if (NAV_PERSIST_PATHS.has(href) && saved[href]) link.href = saved[href];
+        });
+    }
+    function rememberCurrentUrl() {
+        const path = window.location.pathname;
+        if (!NAV_PERSIST_PATHS.has(path)) return;
+        const saved = loadRememberedNavUrls();
+        saved[path] = `${path}${window.location.search}${window.location.hash}`;
+        sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(saved));
+    }
 
     function saveBlocked() {
         localStorage.setItem(LS_KEY, JSON.stringify([...blockedStocks]));
@@ -707,7 +798,7 @@
 
     async function fetchRankingData() {
         try {
-            const res = await fetch(window.API_BASE + '/api/ranking');
+            const res = await fetch('/api/ranking');
             if (!res.ok) return;
             const rows = await res.json();
 
@@ -730,8 +821,9 @@
     }
 
     function buildApiUrl() {
+        syncFiltersToUrl();
         // 数据源切换到实时活跃大单表（与窗口程序"活跃大单"面板一致）
-        return (window.API_BASE || '') + '/api/l2-active-orders';
+        return '/api/l2-active-orders';
     }
 
     async function fetchData() {
@@ -1107,14 +1199,17 @@
         'filter-min-abs-change', 'filter-max-abs-change',
         'filter-max-book-vol'
     ].forEach(id => {
-        document.getElementById(id).addEventListener('input',  () => { renderTable(); renderStats(); });
-        document.getElementById(id).addEventListener('change', () => { renderTable(); renderStats(); });
+        document.getElementById(id).addEventListener('input',  () => { syncFiltersToUrl(); renderTable(); renderStats(); });
+        document.getElementById(id).addEventListener('change', () => { syncFiltersToUrl(); renderTable(); renderStats(); });
     });
 
     // filter-time / filter-limit 对实时活跃大单表无效，监听保留但 noop
     // ['filter-time', 'filter-limit'].forEach(id => { ... });
 
+    restoreFiltersFromUrl();
     saveBlocked();
+    rememberCurrentUrl();
+    hydrateRememberedNavLinks();
 
     function toggleFilters() {
         const bar  = document.querySelector('.filter-bar');

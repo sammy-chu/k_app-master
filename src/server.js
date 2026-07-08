@@ -4273,18 +4273,18 @@ function evaluateScanner(row, scannerType) {
 app.get('/api/scanners', async (req, res) => {
   try {
     const { rows } = await pool.query(`
-      WITH latest_indicators AS (
-        SELECT DISTINCT ON (symbol) *
+      WITH target_indicators AS (
+        SELECT *
         FROM market_data.minute_indicators
-        WHERE bar_time >= NOW() - INTERVAL '15 minutes'
-        ORDER BY symbol, bar_time DESC
+        WHERE trade_date = CURRENT_DATE
       )
       SELECT 
         li.*, 
         COALESCE(os.volume, ds.total_volume, 0) AS current_total_volume
-      FROM latest_indicators li
+      FROM target_indicators li
       LEFT JOIN market_data.ohlc_snapshot os ON os.symbol = li.symbol AND os.trade_date = CURRENT_DATE
       LEFT JOIN market_data.daily_summary ds ON ds.symbol = li.symbol AND ds.trade_date = CURRENT_DATE
+      ORDER BY li.bar_time DESC
     `);
     
     let breakoutCount = 0;
@@ -4305,6 +4305,57 @@ app.get('/api/scanners', async (req, res) => {
   }
 });
 
+// GET /api/scanners/:type/diagnose - Diagnose a specific symbol (returns all history for today)
+app.get('/api/scanners/:type/diagnose', async (req, res) => {
+  const scannerType = req.params.type.toUpperCase();
+  const symbol = req.query.symbol?.toUpperCase();
+  
+  if (!symbol) {
+    return res.status(400).json({ error: 'symbol is required' });
+  }
+
+  try {
+    const { rows } = await pool.query(`
+      WITH target_indicators AS (
+        SELECT *
+        FROM market_data.minute_indicators
+        WHERE symbol = $1 AND trade_date = CURRENT_DATE
+        ORDER BY bar_time DESC
+      )
+      SELECT 
+        li.*, 
+        COALESCE(os.volume, ds.total_volume, 0) AS current_total_volume
+      FROM target_indicators li
+      LEFT JOIN market_data.ohlc_snapshot os ON os.symbol = li.symbol AND os.trade_date = CURRENT_DATE
+      LEFT JOIN market_data.daily_summary ds ON ds.symbol = li.symbol AND ds.trade_date = CURRENT_DATE
+      ORDER BY li.bar_time DESC
+    `, [symbol]);
+
+    if (rows.length === 0) {
+      return res.json({ found: false });
+    }
+
+    const history = rows.map(row => {
+      const evaluation = evaluateScanner(row, scannerType);
+      return {
+        bar_time: row.bar_time,
+        price: row.close != null ? parseFloat(row.close) : null,
+        score: evaluation.score,
+        conditions: evaluation.conditions
+      };
+    });
+    
+    res.json({
+      found: true,
+      symbol: symbol,
+      history: history
+    });
+  } catch (e) {
+    console.error(`[scanners/${scannerType}/diagnose]`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/scanners/:type - Detail of a specific scanner
 app.get('/api/scanners/:type', async (req, res) => {
   const scannerType = req.params.type.toUpperCase();
@@ -4313,18 +4364,18 @@ app.get('/api/scanners/:type', async (req, res) => {
   
   try {
     const { rows } = await pool.query(`
-      WITH latest_indicators AS (
-        SELECT DISTINCT ON (symbol) *
+      WITH target_indicators AS (
+        SELECT *
         FROM market_data.minute_indicators
-        WHERE bar_time >= NOW() - INTERVAL '15 minutes'
-        ORDER BY symbol, bar_time DESC
+        WHERE trade_date = CURRENT_DATE
       )
       SELECT 
         li.*, 
         COALESCE(os.volume, ds.total_volume, 0) AS current_total_volume
-      FROM latest_indicators li
+      FROM target_indicators li
       LEFT JOIN market_data.ohlc_snapshot os ON os.symbol = li.symbol AND os.trade_date = CURRENT_DATE
       LEFT JOIN market_data.daily_summary ds ON ds.symbol = li.symbol AND ds.trade_date = CURRENT_DATE
+      ORDER BY li.bar_time DESC
     `);
     
     let items = [];
@@ -4357,7 +4408,12 @@ app.get('/api/scanners/:type', async (req, res) => {
       }
     }
     
-    items.sort((a, b) => b.signal.score - a.signal.score);
+    items.sort((a, b) => {
+      if (b.signal.score !== a.signal.score) {
+        return b.signal.score - a.signal.score;
+      }
+      return new Date(b.signal.bar_time) - new Date(a.signal.bar_time);
+    });
     items = items.slice(0, limit);
 
     res.json({

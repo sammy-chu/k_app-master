@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>成交量提醒列表</title>
@@ -313,6 +312,40 @@
     </div>
 
     <script>
+        const NAV_STATE_KEY = 'rememberedFilterUrls';
+        const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/abnormal-trades','/boundary-alerts','/oscillator-screener','/l2-alerts','/large-orders','/volatility','/alerts','/volume-alerts','/volume-surge']);
+
+        function syncVolumeFilterUrl(threshold, enabled, priceThreshold, priceEnabled) {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('threshold');
+            url.searchParams.delete('enabled');
+            url.searchParams.delete('price_threshold');
+            url.searchParams.delete('price_enabled');
+            if (threshold > 0) url.searchParams.set('threshold', String(threshold));
+            if (enabled) url.searchParams.set('enabled', '1');
+            if (priceThreshold > 0) url.searchParams.set('price_threshold', String(priceThreshold));
+            if (priceEnabled) url.searchParams.set('price_enabled', '1');
+            window.history.replaceState({}, '', url);
+            rememberCurrentUrl();
+            hydrateRememberedNavLinks();
+        }
+        function loadRememberedNavUrls() {
+            try { return JSON.parse(sessionStorage.getItem(NAV_STATE_KEY) || '{}'); } catch (_) { return {}; }
+        }
+        function hydrateRememberedNavLinks() {
+            const saved = loadRememberedNavUrls();
+            document.querySelectorAll('.nav-links a[href]').forEach(link => {
+                const href = link.getAttribute('href');
+                if (NAV_PERSIST_PATHS.has(href) && saved[href]) link.href = saved[href];
+            });
+        }
+        function rememberCurrentUrl() {
+            const path = window.location.pathname;
+            if (!NAV_PERSIST_PATHS.has(path)) return;
+            const saved = loadRememberedNavUrls();
+            saved[path] = `${path}${window.location.search}${window.location.hash}`;
+            sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(saved));
+        }
         // 格式化北京时间 - 简化格式
         function formatBeijingTime(isoString) {
             const date = new Date(isoString);
@@ -356,7 +389,7 @@
 
         async function loadSettings() {
             try {
-                const res = await fetch(window.API_BASE + '/api/settings');
+                const res = await fetch('/api/settings');
                 if (!res.ok) throw new Error('Failed to load settings');
                 const settings = await res.json();
                 
@@ -479,7 +512,7 @@
 
             try {
                 // Save Checkpoints
-                await fetch(window.API_BASE + '/api/settings/time_checkpoints', {
+                await fetch('/api/settings/time_checkpoints', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ value: timeCheckpoints })
@@ -501,7 +534,7 @@
                     }
 
                     if (String(newValue) !== String(setting.value)) {
-                        await fetch(window.API_BASE + `/api/settings/${key}`, {
+                        await fetch(`/api/settings/${key}`, {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ value: newValue })
@@ -529,7 +562,7 @@
             status.textContent = '正在触发扫描...';
             
             try {
-                const res = await fetch(window.API_BASE + '/api/settings/trigger-volume-scan', { method: 'POST' });
+                const res = await fetch('/api/settings/trigger-volume-scan', { method: 'POST' });
                 if (!res.ok) throw new Error('Request failed');
                 status.textContent = '扫描已在后台启动';
                 status.style.color = '#4caf50';
@@ -662,7 +695,7 @@
 
             try {
                 // Use new lightweight API
-                const res = await fetch(window.API_BASE + `/api/price-snapshot?symbol=${symbol}&minutes=5`);
+                const res = await fetch(`/api/price-snapshot?symbol=${symbol}&minutes=5`);
                 const data = await res.json();
                 
                 if (!data || typeof data.change === 'undefined') return 0;
@@ -734,7 +767,7 @@
         async function loadAlerts() {
             try {
                 // 调用新接口
-                const response = await fetch(window.API_BASE + '/api/volume-alerts-data?limit=200');
+                const response = await fetch('/api/volume-alerts-data?limit=200');
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
@@ -758,6 +791,8 @@
 
         document.addEventListener('DOMContentLoaded', function() {
             console.log('Volume Alerts page loaded');
+            rememberCurrentUrl();
+            hydrateRememberedNavLinks();
             initFilter();
             loadAlerts();
             setInterval(loadAlerts, 10000);
@@ -777,6 +812,7 @@
             const configContent = document.getElementById('config-content');
 
             // 从URL/LocalStorage加载配置 (简化版)
+            const urlParams = new URLSearchParams(window.location.search);
             const savedConfig = localStorage.getItem('volumeFilterConfig');
             if (savedConfig) {
                 try {
@@ -788,6 +824,10 @@
                     if (config.priceEnabled !== undefined) enablePriceCheckbox.checked = config.priceEnabled;
                 } catch(e) {}
             }
+            if (urlParams.has('threshold')) thresholdInput.value = urlParams.get('threshold') || thresholdInput.value;
+            if (urlParams.has('enabled')) enableFilterCheckbox.checked = urlParams.get('enabled') === '1';
+            if (urlParams.has('price_threshold')) priceThresholdInput.value = urlParams.get('price_threshold') || priceThresholdInput.value;
+            if (urlParams.has('price_enabled')) enablePriceCheckbox.checked = urlParams.get('price_enabled') === '1';
 
             toggleBtn.addEventListener('click', function() {
                 const isCollapsed = configContent.classList.contains('collapsed');
@@ -821,6 +861,7 @@
                     threshold, enabled, 
                     priceThreshold, priceEnabled 
                 }));
+                syncVolumeFilterUrl(threshold, enabled, priceThreshold, priceEnabled);
                 
                 // Update Status Text
                 if (enabled) {

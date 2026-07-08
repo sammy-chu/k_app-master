@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>波动率监控</title>
@@ -226,7 +225,80 @@ table.matrix td.hour-end { border-right: 1px solid #30363d; }
 // ── 状态 ──
 let _autoTimer    = null;
 let _lastData     = null;   // 缓存最近一次成功渲染的数据,导出按钮直接用
-let _currentTable = 'cycles';  // 当前激活的数据源 Tab:'cycles' | 'sliding'
+// 移除重复声明，变量已在下方代码块中定义
+
+let _currentTable = 'cycles';
+const NAV_STATE_KEY = 'rememberedFilterUrls';
+const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/abnormal-trades','/boundary-alerts','/oscillator-screener','/l2-alerts','/large-orders','/volatility','/alerts','/volume-alerts','/volume-surge']);
+
+function readFiltersFromDom() {
+  return {
+    date: document.getElementById('inp-date').value || '',
+    min_sigma: document.getElementById('inp-minsigma').value || '',
+    from: document.getElementById('inp-from').value || '',
+    to: document.getElementById('inp-to').value || '',
+    limit: document.getElementById('inp-limit').value || '',
+    metric: document.getElementById('sel-metric').value || 'sigma',
+    hide_zero: document.getElementById('chk-hide-zero').checked ? '1' : '',
+    table: _currentTable
+  };
+}
+function writeFiltersToDom(filters) {
+  if (filters.date) document.getElementById('inp-date').value = filters.date;
+  if (filters.min_sigma) document.getElementById('inp-minsigma').value = filters.min_sigma;
+  if (filters.from) document.getElementById('inp-from').value = filters.from;
+  if (filters.to) document.getElementById('inp-to').value = filters.to;
+  if (filters.limit) document.getElementById('inp-limit').value = filters.limit;
+  if (filters.metric) document.getElementById('sel-metric').value = filters.metric;
+  document.getElementById('chk-hide-zero').checked = filters.hide_zero === '1';
+  _currentTable = filters.table === 'sliding' ? 'sliding' : 'cycles';
+  document.querySelectorAll('.tab-bar .tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.table === _currentTable);
+  });
+}
+function syncFiltersToUrl() {
+  const url = new URL(window.location.href);
+  const filters = readFiltersFromDom();
+  Object.keys(filters).forEach(key => url.searchParams.delete(key));
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value && !(key === 'metric' && value === 'sigma') && !(key === 'table' && value === 'cycles')) {
+      url.searchParams.set(key, value);
+    }
+  });
+  window.history.replaceState({}, '', url);
+  rememberCurrentUrl();
+  hydrateRememberedNavLinks();
+}
+function restoreFiltersFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  writeFiltersToDom({
+    date: params.get('date') || '',
+    min_sigma: params.get('min_sigma') || '',
+    from: params.get('from') || '',
+    to: params.get('to') || '',
+    limit: params.get('limit') || '',
+    metric: params.get('metric') || '',
+    hide_zero: params.get('hide_zero') || '',
+    table: params.get('table') || ''
+  });
+}
+function loadRememberedNavUrls() {
+  try { return JSON.parse(sessionStorage.getItem(NAV_STATE_KEY) || '{}'); } catch (_) { return {}; }
+}
+function hydrateRememberedNavLinks() {
+  const saved = loadRememberedNavUrls();
+  document.querySelectorAll('a[href]').forEach(link => {
+    const href = link.getAttribute('href');
+    if (NAV_PERSIST_PATHS.has(href) && saved[href]) link.href = saved[href];
+  });
+}
+function rememberCurrentUrl() {
+  const path = window.location.pathname;
+  if (!NAV_PERSIST_PATHS.has(path)) return;
+  const saved = loadRememberedNavUrls();
+  saved[path] = `${path}${window.location.search}${window.location.hash}`;
+  sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(saved));
+}
 
 // ── Tab 切换 ──
 function switchTab(table) {
@@ -235,11 +307,15 @@ function switchTab(table) {
   document.querySelectorAll('.tab-bar .tab').forEach(el => {
     el.classList.toggle('active', el.dataset.table === table);
   });
+  syncFiltersToUrl();
   fetchMatrix();
 }
 
 // ── 初始化 ──
 document.getElementById('inp-date').value = todayStr();
+restoreFiltersFromUrl();
+rememberCurrentUrl();
+hydrateRememberedNavLinks();
 fetchMatrix();
 
 function todayStr() {
@@ -248,6 +324,7 @@ function todayStr() {
 
 // ── 拉数据并渲染 ──
 async function fetchMatrix() {
+  syncFiltersToUrl();
   const date     = document.getElementById('inp-date').value || todayStr();
   const minSigma = document.getElementById('inp-minsigma').value || 0;
   const from     = document.getElementById('inp-from').value || '08:05';
@@ -259,7 +336,7 @@ async function fetchMatrix() {
 
   setStatus('加载中...');
   try {
-    const url = (window.API_BASE || '') + `/api/volatility/matrix?date=${date}&min_sigma=${minSigma}`
+    const url = `/api/volatility/matrix?date=${date}&min_sigma=${minSigma}`
               + `&from=${from}&to=${to}&limit=${limit}&metric=${metric}&table=${table}`;
     const r    = await fetch(url);
     const data = await r.json();

@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>山丘放量提醒列表</title>
@@ -184,7 +183,7 @@
             
             try {
                 if (!isBackground) log(`Fetching /api/hill-alerts with min_ratio=${minRatio}...`);
-                const res = await fetch(window.API_BASE + `/api/hill-alerts?limit=50&min_ratio=${minRatio}`);
+                const res = await fetch(`/api/hill-alerts?limit=50&min_ratio=${minRatio}`);
                 if (!isBackground) log(`Response status: ${res.status}`);
                 
                 if (!res.ok) {
@@ -201,7 +200,7 @@
                 log('Error loading data: ' + e.message);
                 console.error(e);
                 if (!isBackground) {
-                    container.innerHTML = `<div style="color:red">加载失败: ${e.message}<br>请检查后端服务器是否启动 (localhost:3000)</div>`;
+                    container.innerHTML = `<div style="color:red">加载失败: ${e.message}<br>请检查后端服务器是否启动 (localhost:8889)</div>`;
                 }
             }
         }

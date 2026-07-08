@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>放量监控 · Volume Surge</title>
@@ -203,9 +202,82 @@
   let SORT_DIR = 'desc';
   let TIMER = null;
   let LAST_OK = 0;
+  const NAV_STATE_KEY = 'rememberedFilterUrls';
+  const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/abnormal-trades','/boundary-alerts','/oscillator-screener','/l2-alerts','/large-orders','/volatility','/alerts','/volume-alerts','/volume-surge']);
 
   const $ = (id) => document.getElementById(id);
   const tbody = $('tbody');
+  function readFiltersFromDom() {
+    return {
+      ratio: $('f-ratio').value.trim(),
+      recvol: $('f-recvol').value.trim(),
+      price_min: $('f-price-min').value.trim(),
+      price_max: $('f-price-max').value.trim(),
+      chg_min: $('f-chg-min').value.trim(),
+      symbol: $('f-symbol').value.trim().toUpperCase(),
+      auto_refresh: $('auto-refresh').checked ? '1' : '',
+      interval: $('interval-sel').value || '',
+      sort_key: SORT_KEY,
+      sort_dir: SORT_DIR
+    };
+  }
+  function writeFiltersToDom(filters) {
+    $('f-ratio').value = filters.ratio || '';
+    $('f-recvol').value = filters.recvol || '';
+    $('f-price-min').value = filters.price_min || '';
+    $('f-price-max').value = filters.price_max || '';
+    $('f-chg-min').value = filters.chg_min || '';
+    $('f-symbol').value = filters.symbol || '';
+    $('auto-refresh').checked = filters.auto_refresh === '1';
+    if (filters.interval) $('interval-sel').value = filters.interval;
+    if (filters.sort_key) SORT_KEY = filters.sort_key;
+    if (filters.sort_dir) SORT_DIR = filters.sort_dir;
+  }
+  function syncFiltersToUrl() {
+    const url = new URL(window.location.href);
+    const filters = readFiltersFromDom();
+    Object.keys(filters).forEach(key => url.searchParams.delete(key));
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value && !(key === 'sort_key' && value === 'ratio') && !(key === 'sort_dir' && value === 'desc')) {
+        url.searchParams.set(key, value);
+      }
+    });
+    window.history.replaceState({}, '', url);
+    rememberCurrentUrl();
+    hydrateRememberedNavLinks();
+  }
+  function restoreFiltersFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    writeFiltersToDom({
+      ratio: params.get('ratio') || '',
+      recvol: params.get('recvol') || '',
+      price_min: params.get('price_min') || '',
+      price_max: params.get('price_max') || '',
+      chg_min: params.get('chg_min') || '',
+      symbol: params.get('symbol') || '',
+      auto_refresh: params.get('auto_refresh') || '',
+      interval: params.get('interval') || '',
+      sort_key: params.get('sort_key') || '',
+      sort_dir: params.get('sort_dir') || ''
+    });
+  }
+  function loadRememberedNavUrls() {
+    try { return JSON.parse(sessionStorage.getItem(NAV_STATE_KEY) || '{}'); } catch (_) { return {}; }
+  }
+  function hydrateRememberedNavLinks() {
+    const saved = loadRememberedNavUrls();
+    document.querySelectorAll('a[href]').forEach(link => {
+      const href = link.getAttribute('href');
+      if (NAV_PERSIST_PATHS.has(href) && saved[href]) link.href = saved[href];
+    });
+  }
+  function rememberCurrentUrl() {
+    const path = window.location.pathname;
+    if (!NAV_PERSIST_PATHS.has(path)) return;
+    const saved = loadRememberedNavUrls();
+    saved[path] = `${path}${window.location.search}${window.location.hash}`;
+    sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(saved));
+  }
 
   // ─────────────── 数值格式化 ───────────────
   const fmtInt = (v) => v == null ? '—' : Number(v).toLocaleString();
@@ -225,8 +297,9 @@
 
   // ─────────────── 拉数据 ───────────────
   async function fetchData() {
+    syncFiltersToUrl();
     try {
-      const r = await fetch(window.API_BASE + '/api/volume-surge', { cache: 'no-store' });
+      const r = await fetch('/api/volume-surge', { cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const data = await r.json();
       RAW = data.symbols || [];
@@ -290,6 +363,7 @@
 
   // ─────────────── 渲染 ───────────────
   function render() {
+    syncFiltersToUrl();
     const filtered = applyFilters(RAW);
     const sorted   = applySort(filtered);
 
@@ -389,6 +463,9 @@
   $('interval-sel').addEventListener('change', reschedule);
 
   // ─────────────── 启动 ───────────────
+  restoreFiltersFromUrl();
+  rememberCurrentUrl();
+  hydrateRememberedNavLinks();
   fetchData();
   reschedule();
 })();

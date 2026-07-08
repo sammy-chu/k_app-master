@@ -245,6 +245,68 @@
     }
     tr:hover .btn-block-inline { display: inline-block; }
     .btn-block-inline:hover { border-color: #ef5350; color: #ef5350; }
+
+    /* ── 代码查询框 ── */
+    .lookup-panel {
+      background: #222; border: 1px solid #333; border-radius: 6px;
+      margin-bottom: 14px; padding: 12px 16px;
+    }
+    .lookup-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .lookup-row label { font-size: 12px; color: #888; white-space: nowrap; }
+    #symbolInput {
+      width: 130px; font-size: 14px; font-weight: bold;
+      text-transform: uppercase; letter-spacing: 0.05em;
+      background: #1a1a1a; border: 1px solid #444; color: #ddd;
+      padding: 5px 8px; border-radius: 4px; outline: none;
+    }
+    #symbolInput:focus { border-color: #007acc; }
+    .lookup-result {
+      margin-top: 10px; display: none;
+      background: #1a1a1a; border: 1px solid #333; border-radius: 4px;
+      padding: 10px 14px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .lookup-result.show { display: block; }
+    
+    .lookup-sym {
+      font-size: 16px; font-weight: bold; color: #fff; margin-bottom: 8px;
+    }
+    .lookup-sym span { font-size: 12px; font-weight: normal; margin-left: 10px; }
+    .lookup-sym .pass-all { color: #26a69a; }
+    .lookup-sym .fail-some { color: #ef5350; }
+    
+    .timeline { display: flex; flex-direction: column; position: relative; margin-top: 10px; }
+    .timeline::before {
+      content: ''; position: absolute; left: 56px; top: 8px; bottom: 8px;
+      width: 1px; background: #2e2e2e; z-index: 0;
+    }
+    .tl-item { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0; border-bottom: 1px solid #2a2a2a; }
+    .tl-item:last-child { border-bottom: none; }
+    .tl-time { font-size: 12px; color: #888; white-space: nowrap; width: 48px; text-align: right; padding-top: 3px; flex-shrink: 0; }
+    .tl-dot { width: 9px; height: 9px; border-radius: 50%; background: #444; flex-shrink: 0; margin-top: 6px; position: relative; z-index: 1; box-shadow: 0 0 0 2px #1a1a1a; }
+    .tl-dot.pass { background: #26a69a; }
+    .tl-body { flex: 1; }
+    
+    .tl-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+    .tl-score { font-weight: bold; font-size: 13px; }
+    .tl-score.high { color: #26a69a; }
+    .tl-score.low { color: #ef5350; }
+    .tl-price { font-size: 12px; color: #aaa; }
+
+    .rule-detail-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+    }
+    .rule-card {
+      background: #252525; border-radius: 4px; padding: 6px 8px;
+      border-left: 3px solid #333;
+    }
+    .rule-card.pass { border-left-color: #26a69a; }
+    .rule-card.fail { border-left-color: #ef5350; }
+    .rule-card-title { font-size: 10px; color: #666; margin-bottom: 2px; }
+    .rule-card-value { font-size: 12px; font-weight: bold; }
+    .rule-card.pass .rule-card-value { color: #26a69a; }
+    .rule-card.fail .rule-card-value { color: #ef5350; }
   </style>
 </head>
 <body>
@@ -307,6 +369,14 @@
               <input type="number" id="volMax" placeholder="最高" style="width: 100px;" min="0">
             </div>
           </div>
+          <div class="filter-group">
+            <label>时间 (HH:MM)</label>
+            <div class="filter-row">
+              <input type="time" id="timeMin" style="width: 100px; background: #1a1a1a; border: 1px solid #444; color: #ddd; padding: 4px 8px; border-radius: 4px; font-size: 13px;">
+              <span class="filter-sep">—</span>
+              <input type="time" id="timeMax" style="width: 100px; background: #1a1a1a; border: 1px solid #444; color: #ddd; padding: 4px 8px; border-radius: 4px; font-size: 13px;">
+            </div>
+          </div>
           <div class="filter-group" style="min-width: 200px;">
             <label>屏蔽股票 (逗号分隔或回车)</label>
             <div class="filter-row">
@@ -321,6 +391,17 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- 股票查询面板 -->
+    <div class="lookup-panel">
+      <div class="lookup-row">
+        <label>单股查询:</label>
+        <input type="text" id="symbolInput" placeholder="输入代码..." onkeydown="if(event.key==='Enter') lookupSymbol()">
+        <button class="btn primary" onclick="lookupSymbol()" id="lookupBtn">查询</button>
+        <button class="btn" onclick="clearLookup()">清除</button>
+      </div>
+      <div class="lookup-result" id="lookupResult"></div>
     </div>
 
     <table id="signal-table">
@@ -476,6 +557,8 @@
         blockedStocks = [];
         saveBlocked();
         applyFilter();
+        // 修复：清空后也要重新渲染弹窗里的列表
+        renderBlockList();
       }
     }
 
@@ -491,6 +574,8 @@
       document.getElementById('priceMax').value = '';
       document.getElementById('volMin').value = '';
       document.getElementById('volMax').value = '';
+      document.getElementById('timeMin').value = '';
+      document.getElementById('timeMax').value = '';
       applyFilter();
     }
 
@@ -499,10 +584,13 @@
       const pMax = document.getElementById('priceMax').value;
       const vMin = document.getElementById('volMin').value;
       const vMax = document.getElementById('volMax').value;
+      const tMin = document.getElementById('timeMin').value;
+      const tMax = document.getElementById('timeMax').value;
       
       const pills = [];
       if (pMin || pMax) pills.push(`<span class="filter-pill">价: ${pMin||'0'} - ${pMax||'∞'}</span>`);
       if (vMin || vMax) pills.push(`<span class="filter-pill">量: ${vMin||'0'} - ${vMax||'∞'}</span>`);
+      if (tMin || tMax) pills.push(`<span class="filter-pill">时: ${tMin||'00:00'} - ${tMax||'23:59'}</span>`);
       
       document.getElementById('filterPills').innerHTML = pills.join('');
     }
@@ -512,12 +600,24 @@
       const pMax = parseFloat(document.getElementById('priceMax').value);
       const vMin = parseFloat(document.getElementById('volMin').value);
       const vMax = parseFloat(document.getElementById('volMax').value);
+      const tMin = document.getElementById('timeMin').value;
+      const tMax = document.getElementById('timeMax').value;
 
       updateFilterPills();
 
       const filtered = allItems.filter(item => {
         if (blockedStocks.includes(item.symbol)) return false;
         
+        const sig = item.signal || {};
+
+        // 时间过滤 (提取 HH:MM 格式进行字典序比较)
+        if (sig.bar_time && (tMin || tMax)) {
+          const d = new Date(sig.bar_time);
+          const hhmm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+          if (tMin && hhmm < tMin) return false;
+          if (tMax && hhmm > tMax) return false;
+        }
+
         const ind = item.indicators || {};
         const price = ind.close;
         if (price != null) {
@@ -534,7 +634,96 @@
         return true;
       });
 
-      renderTable(filtered);
+      // 排序：不限制时间时，按时间倒序排列（最新的在上面）
+      filtered.sort((a, b) => {
+        const timeA = (a.signal && a.signal.bar_time) ? new Date(a.signal.bar_time).getTime() : 0;
+        const timeB = (b.signal && b.signal.bar_time) ? new Date(b.signal.bar_time).getTime() : 0;
+        return timeB - timeA;
+      });
+
+      // 前端最多显示50条数据
+      const finalItems = filtered.slice(0, 50);
+      renderTable(finalItems);
+    }
+
+    // ── 单股查询 ──
+    async function lookupSymbol() {
+      const sym = document.getElementById('symbolInput').value.trim().toUpperCase();
+      if (!sym) return;
+      const el = document.getElementById('lookupResult');
+      el.className = 'lookup-result show';
+      el.innerHTML = `<div style="color:#888;font-size:13px;">查询 ${sym} 的历史状态中…</div>`;
+      
+      try {
+        const res = await fetch(`/api/scanners/RANGE/diagnose?symbol=${encodeURIComponent(sym)}`);
+        if (!res.ok) throw new Error(res.status);
+        const data = await res.json();
+        
+        if (!data.found || !data.history || data.history.length === 0) {
+          el.innerHTML = `<div style="color:#888;font-size:13px;">今日暂无 ${sym} 的指标数据。</div>`;
+          return;
+        }
+        
+        let timelineHtml = '<div class="timeline">';
+        
+        data.history.forEach(point => {
+          const conds = point.conditions || {};
+          let passedCount = 0;
+          let totalCount = 0;
+          let gridHtml = '';
+          
+          for (const [key, val] of Object.entries(conds)) {
+            totalCount++;
+            if (val.pass) passedCount++;
+            const cls = val.pass ? 'pass' : 'fail';
+            const act = typeof val.actual === 'number' ? val.actual.toFixed(4) : val.actual;
+            gridHtml += `
+              <div class="rule-card ${cls}">
+                <div class="rule-card-title">${key.toUpperCase()}</div>
+                <div class="rule-card-value">${act}</div>
+              </div>
+            `;
+          }
+          
+          const isPassAll = passedCount === totalCount;
+          const dotClass = isPassAll ? 'pass' : '';
+          const scoreClass = point.score >= 80 ? 'high' : (point.score < 50 ? 'low' : '');
+          const timeStr = formatTime(point.bar_time);
+          
+          timelineHtml += `
+            <div class="tl-item">
+              <div class="tl-time">${timeStr.split(' ')[0]}</div>
+              <div class="tl-dot ${dotClass}"></div>
+              <div class="tl-body">
+                <div class="tl-header">
+                  <span class="tl-score ${scoreClass}">Score: ${point.score}</span>
+                  <span class="tl-price">Price: ${point.price}</span>
+                </div>
+                <div class="rule-detail-grid">
+                  ${gridHtml}
+                </div>
+              </div>
+            </div>
+          `;
+        });
+        
+        timelineHtml += '</div>';
+          
+        el.innerHTML = `
+          <div class="lookup-sym">
+            ${data.symbol} <span>今日所有指标快照 (${data.history.length}条)</span>
+          </div>
+          ${timelineHtml}
+        `;
+      } catch (e) {
+        el.innerHTML = `<div style="color:#ef5350;font-size:13px;">查询失败：${e.message}</div>`;
+      }
+    }
+
+    function clearLookup() {
+      document.getElementById('symbolInput').value = '';
+      document.getElementById('lookupResult').className = 'lookup-result';
+      document.getElementById('lookupResult').innerHTML = '';
     }
 
     function formatDetails(conditions) {
@@ -553,7 +742,7 @@
     async function fetchData() {
       const dot = document.getElementById('status-dot');
       try {
-        const res = await fetch('/api/scanners/RANGE?min_score=70&limit=100');
+        const res = await fetch('/api/scanners/RANGE?min_score=100&limit=200');
         if (!res.ok) throw new Error('Network response was not ok');
         const data = await res.json();
         

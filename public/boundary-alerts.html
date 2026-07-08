@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>边界预警</title>
@@ -560,6 +559,67 @@ let blockedStocks = JSON.parse(localStorage.getItem('sharedBlockedStocks') || '[
 
 const SORT_KEYS = ['symbol','last_price','change_pct','total_volume','day_range','avg_range','winHigh','priceA','maxA','cycleVol','anchorTime'];
 const FILTER_IDS = ['priceMin','priceMax','volMin','volMax','dayRangeMin','dayRangeMax','avgRangeMin','avgRangeMax'];
+const FILTER_QUERY_KEYS = FILTER_IDS.map(id => id.replace(/([A-Z])/g, '_$1').toLowerCase());
+const NAV_STATE_KEY = 'rememberedFilterUrls';
+const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/abnormal-trades','/boundary-alerts','/oscillator-screener','/l2-alerts','/large-orders','/volatility','/alerts','/volume-alerts','/volume-surge']);
+
+function queryKeyToId(key) {
+  return key.replace(/_([a-z])/g, (_, ch) => ch.toUpperCase());
+}
+function readFiltersFromDom() {
+  const filters = {};
+  FILTER_IDS.forEach(id => {
+    const value = document.getElementById(id)?.value.trim();
+    if (value) filters[id.replace(/([A-Z])/g, '_$1').toLowerCase()] = value;
+  });
+  return filters;
+}
+function writeFiltersToDom(filters) {
+  FILTER_QUERY_KEYS.forEach(key => {
+    const el = document.getElementById(queryKeyToId(key));
+    if (el) el.value = filters[key] || '';
+  });
+}
+function syncFiltersToUrl() {
+  const url = new URL(window.location.href);
+  FILTER_QUERY_KEYS.forEach(key => url.searchParams.delete(key));
+  Object.entries(readFiltersFromDom()).forEach(([key, value]) => {
+    if (value) url.searchParams.set(key, value);
+  });
+  window.history.replaceState({}, '', url);
+  rememberCurrentUrl();
+  hydrateRememberedNavLinks();
+}
+function restoreFiltersFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const filters = {};
+  FILTER_QUERY_KEYS.forEach(key => {
+    const value = params.get(key);
+    if (value !== null) filters[key] = value;
+  });
+  writeFiltersToDom(filters);
+}
+function loadRememberedNavUrls() {
+  try {
+    return JSON.parse(sessionStorage.getItem(NAV_STATE_KEY) || '{}');
+  } catch (_) {
+    return {};
+  }
+}
+function hydrateRememberedNavLinks() {
+  const saved = loadRememberedNavUrls();
+  document.querySelectorAll('.nav-links a[href]').forEach(link => {
+    const href = link.getAttribute('href');
+    if (NAV_PERSIST_PATHS.has(href) && saved[href]) link.href = saved[href];
+  });
+}
+function rememberCurrentUrl() {
+  const path = window.location.pathname;
+  if (!NAV_PERSIST_PATHS.has(path)) return;
+  const saved = loadRememberedNavUrls();
+  saved[path] = `${path}${window.location.search}${window.location.hash}`;
+  sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(saved));
+}
 
 // ── BLOCKED STOCKS ────────────────────────────────────────────────────────
 function saveBlocked() {
@@ -713,6 +773,7 @@ function clearFilters() {
     const el = document.getElementById(id);
     if (el) { el.value = ''; el.classList.remove('has-value'); }
   });
+  syncFiltersToUrl();
   applyFilter();
 }
 
@@ -753,7 +814,7 @@ async function fetchData() {
     if (avgRangeMax !== null) params.avg_range_max = avgRangeMax;
 
     const qs = Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-    const res = await fetch(window.API_BASE + `/api/boundary-alerts${qs ? '?'+qs : ''}`);
+    const res = await fetch(`/api/boundary-alerts${qs ? '?'+qs : ''}`);
     if (!res.ok) throw new Error(res.status);
     const json = await res.json();
     allData = json.alerts || [];
@@ -779,20 +840,8 @@ async function fetchData() {
 }
 
 // ── APPLY FILTER & SORT ───────────────────────────────────────────────────
-const LS_KEY_BA = 'boundary_alerts_filters';
-function saveFilters() {
-  const state = {};
-  FILTER_IDS.forEach(id => { const el = document.getElementById(id); if (el) state[id] = el.value; });
-  try { localStorage.setItem(LS_KEY_BA, JSON.stringify(state)); } catch(e) {}
-}
-function restoreFilters() {
-  let state;
-  try { state = JSON.parse(localStorage.getItem(LS_KEY_BA)); } catch(e) {}
-  if (!state) return;
-  FILTER_IDS.forEach(id => { const el = document.getElementById(id); if (el && state[id] != null) el.value = state[id]; });
-}
-
 function applyFilter() {
+  syncFiltersToUrl();
   updateHighlights();
   // 前端二次筛选（API 已过滤，这里处理实时输入联动）
   const priceMin    = getV('priceMin');
@@ -1038,7 +1087,7 @@ async function checkRealtime(sym) {
   document.getElementById('historyPanel').innerHTML = '';
   el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} 实时状态中…</div>`;
   try {
-    const res  = await fetch(window.API_BASE + `/api/boundary-alerts/check?symbol=${encodeURIComponent(sym)}`);
+    const res  = await fetch(`/api/boundary-alerts/check?symbol=${encodeURIComponent(sym)}`);
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     renderLookupResult(sym, null, data);
@@ -1069,7 +1118,7 @@ async function diagnoseSymbol() {
   if (isSingle) {
     el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} @ ${singleTime} 快照中…</div>`;
     try {
-      const res  = await fetch(window.API_BASE + `/api/boundary-alerts/diagnose?symbol=${encodeURIComponent(sym)}&time=${encodeURIComponent(singleTime)}`);
+      const res  = await fetch(`/api/boundary-alerts/diagnose?symbol=${encodeURIComponent(sym)}&time=${encodeURIComponent(singleTime)}`);
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
       renderLookupResult(sym, singleTime, data);
@@ -1079,7 +1128,7 @@ async function diagnoseSymbol() {
   } else {
     el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} ${from}–${to} 快照中…</div>`;
     try {
-      const res  = await fetch(window.API_BASE + `/api/boundary-alerts/diagnose-range?symbol=${encodeURIComponent(sym)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+      const res  = await fetch(`/api/boundary-alerts/diagnose-range?symbol=${encodeURIComponent(sym)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
       renderDiagnoseRange(sym, data);
@@ -1222,7 +1271,7 @@ async function lookupHistory() {
   panel.className = 'history-panel show';
   panel.innerHTML = `<div class="history-empty">正在查询 ${sym} 今日时间点…</div>`;
   try {
-    const res  = await fetch(window.API_BASE + `/api/boundary-alerts/history?symbol=${encodeURIComponent(sym)}`);
+    const res  = await fetch(`/api/boundary-alerts/history?symbol=${encodeURIComponent(sym)}`);
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     renderHistory(sym, data);
@@ -1301,8 +1350,8 @@ document.addEventListener('visibilitychange', () => {
 FILTER_IDS.forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
-  el.addEventListener('input', () => { saveFilters(); applyFilter(); });
-  el.addEventListener('keydown', e => { if (e.key === 'Enter') { saveFilters(); applyFilter(); } });
+  el.addEventListener('input', () => applyFilter());
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') applyFilter(); });
 });
 
 const blockInputEl = document.getElementById('blockInput');
@@ -1354,7 +1403,9 @@ document.addEventListener('contextmenu', e => {
 });
 
 saveBlocked();
-restoreFilters();
+restoreFiltersFromUrl();
+rememberCurrentUrl();
+hydrateRememberedNavLinks();
 fetchData();
 </script>
 </body>

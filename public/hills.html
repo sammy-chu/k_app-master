@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>山丘形放量监控</title>
@@ -160,7 +159,7 @@
             container.innerHTML = '<div class="loading">正在分析数据...</div>';
 
             try {
-                const res = await fetch(window.API_BASE + `/api/patterns/flexible-hills?date=${date}`);
+                const res = await fetch(`/api/patterns/flexible-hills?date=${date}`);
                 const json = await res.json();
                 
                 // 写入缓存

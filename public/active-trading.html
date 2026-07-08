@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>活跃成交</title>
@@ -425,6 +424,67 @@ let maxVol = 1;
 let blockedStocks = JSON.parse(localStorage.getItem('sharedBlockedStocks') || '[]');
 
 const FILTER_IDS = ['priceMin','priceMax','volMin','volMax','dayRangeMin','dayRangeMax','spreadMin','spreadMax'];
+const FILTER_QUERY_KEYS = FILTER_IDS.map(id => id.replace(/([A-Z])/g, '_$1').toLowerCase());
+const NAV_STATE_KEY = 'rememberedFilterUrls';
+const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/oscillator-screener','/abnormal-trades']);
+
+function queryKeyToId(key) {
+  return key.replace(/_([a-z])/g, (_, ch) => ch.toUpperCase());
+}
+function readFiltersFromDom() {
+  const filters = {};
+  FILTER_IDS.forEach(id => {
+    const value = document.getElementById(id)?.value.trim();
+    if (value) filters[id.replace(/([A-Z])/g, '_$1').toLowerCase()] = value;
+  });
+  return filters;
+}
+function writeFiltersToDom(filters) {
+  FILTER_QUERY_KEYS.forEach(key => {
+    const el = document.getElementById(queryKeyToId(key));
+    if (el) el.value = filters[key] || '';
+  });
+}
+function syncFiltersToUrl() {
+  const url = new URL(window.location.href);
+  FILTER_QUERY_KEYS.forEach(key => url.searchParams.delete(key));
+  Object.entries(readFiltersFromDom()).forEach(([key, value]) => {
+    if (value) url.searchParams.set(key, value);
+  });
+  window.history.replaceState({}, '', url);
+  rememberCurrentUrl();
+  hydrateRememberedNavLinks();
+}
+function restoreFiltersFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const filters = {};
+  FILTER_QUERY_KEYS.forEach(key => {
+    const value = params.get(key);
+    if (value !== null) filters[key] = value;
+  });
+  writeFiltersToDom(filters);
+}
+function loadRememberedNavUrls() {
+  try {
+    return JSON.parse(sessionStorage.getItem(NAV_STATE_KEY) || '{}');
+  } catch (_) {
+    return {};
+  }
+}
+function hydrateRememberedNavLinks() {
+  const saved = loadRememberedNavUrls();
+  document.querySelectorAll('.nav-links a[href]').forEach(link => {
+    const href = link.getAttribute('href');
+    if (NAV_PERSIST_PATHS.has(href) && saved[href]) link.href = saved[href];
+  });
+}
+function rememberCurrentUrl() {
+  const path = window.location.pathname;
+  if (!NAV_PERSIST_PATHS.has(path)) return;
+  const saved = loadRememberedNavUrls();
+  saved[path] = `${path}${window.location.search}${window.location.hash}`;
+  sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(saved));
+}
 
 // ── 宽限期保留：股票掉出活跃列表后，按掉线前成交次数保留一段时间再彻底移除 ──
 const GRACE_LOW_MS  = 2 * 60 * 1000;  // 成交次数 < 10：保留 2 分钟
@@ -444,7 +504,7 @@ async function fetchData() {
   const dot  = document.getElementById('status-dot');
   const stxt = document.getElementById('status-text');
   try {
-    const res = await fetch(window.API_BASE + '/api/active-trading');
+    const res = await fetch('/api/active-trading');
     if (!res.ok) throw new Error(res.status);
     const json = await res.json();
     mergeFreshData(json.symbols || []);
@@ -507,6 +567,7 @@ function mergeFreshData(freshRows) {
 
 // ── APPLY FILTER & SORT ───────────────────────────────────────────────────
 function applyFilter() {
+  syncFiltersToUrl();
   updateHighlights();
   const priceMin    = getV('priceMin');
   const priceMax    = getV('priceMax');
@@ -600,6 +661,7 @@ function clearFilters() {
     const el = document.getElementById(id);
     if (el) { el.value = ''; el.classList.remove('has-value'); }
   });
+  syncFiltersToUrl();
   applyFilter();
 }
 
@@ -789,6 +851,10 @@ FILTER_IDS.forEach(id => {
   el.addEventListener('input', () => applyFilter());
   el.addEventListener('keydown', e => { if (e.key === 'Enter') applyFilter(); });
 });
+
+restoreFiltersFromUrl();
+rememberCurrentUrl();
+hydrateRememberedNavLinks();
 
 const blockInputEl = document.getElementById('blockInput');
 if (blockInputEl) {

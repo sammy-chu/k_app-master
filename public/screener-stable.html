@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>稳定选股器</title>
@@ -701,6 +700,67 @@ function evalRow(row) {
 // ── INPUTS ────────────────────────────────────────────────────────────────
 const FILTER_IDS = ['priceMin','priceMax','changeMin','changeMax','volMin','volMax',
                     'changeAmtMin','changeAmtMax'];
+const FILTER_QUERY_KEYS = FILTER_IDS.map(id => id.replace(/([A-Z])/g, '_$1').toLowerCase());
+const NAV_STATE_KEY = 'rememberedFilterUrls';
+const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/oscillator-screener','/abnormal-trades']);
+
+function queryKeyToId(key) {
+  return key.replace(/_([a-z])/g, (_, ch) => ch.toUpperCase());
+}
+function readFiltersFromDom() {
+  const filters = {};
+  FILTER_IDS.forEach(id => {
+    const value = document.getElementById(id)?.value.trim();
+    if (value) filters[id.replace(/([A-Z])/g, '_$1').toLowerCase()] = value;
+  });
+  return filters;
+}
+function writeFiltersToDom(filters) {
+  FILTER_QUERY_KEYS.forEach(key => {
+    const el = document.getElementById(queryKeyToId(key));
+    if (el) el.value = filters[key] || '';
+  });
+}
+function syncFiltersToUrl() {
+  const url = new URL(window.location.href);
+  FILTER_QUERY_KEYS.forEach(key => url.searchParams.delete(key));
+  Object.entries(readFiltersFromDom()).forEach(([key, value]) => {
+    if (value) url.searchParams.set(key, value);
+  });
+  window.history.replaceState({}, '', url);
+  rememberCurrentUrl();
+  hydrateRememberedNavLinks();
+}
+function restoreFiltersFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const filters = {};
+  FILTER_QUERY_KEYS.forEach(key => {
+    const value = params.get(key);
+    if (value !== null) filters[key] = value;
+  });
+  writeFiltersToDom(filters);
+}
+function loadRememberedNavUrls() {
+  try {
+    return JSON.parse(sessionStorage.getItem(NAV_STATE_KEY) || '{}');
+  } catch (_) {
+    return {};
+  }
+}
+function hydrateRememberedNavLinks() {
+  const saved = loadRememberedNavUrls();
+  document.querySelectorAll('.nav-links a[href]').forEach(link => {
+    const href = link.getAttribute('href');
+    if (NAV_PERSIST_PATHS.has(href) && saved[href]) link.href = saved[href];
+  });
+}
+function rememberCurrentUrl() {
+  const path = window.location.pathname;
+  if (!NAV_PERSIST_PATHS.has(path)) return;
+  const saved = loadRememberedNavUrls();
+  saved[path] = `${path}${window.location.search}${window.location.hash}`;
+  sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(saved));
+}
 
 function getV(id) {
   const v = document.getElementById(id)?.value.trim();
@@ -742,6 +802,7 @@ function clearFilters() {
     const el = document.getElementById(id);
     if (el) { el.value = ''; el.classList.remove('has-value'); }
   });
+  syncFiltersToUrl();
   applyFilter();
 }
 
@@ -764,7 +825,7 @@ async function fetchData(params) {
   const stxt = document.getElementById('status-text');
   try {
     const qs  = Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-    const res = await fetch(window.API_BASE + `/api/screener-stable${qs ? '?'+qs : ''}`);
+    const res = await fetch(`/api/screener-stable${qs ? '?'+qs : ''}`);
     if (!res.ok) throw new Error(res.status);
     allData = await res.json();
     maxVol  = allData.reduce((m, r) => Math.max(m, Number(r.total_volume)||0), 1);
@@ -787,30 +848,13 @@ async function fetchData(params) {
 
 function run() {
   updateHighlights();
+  syncFiltersToUrl();
   if (allData.length === 0) {
+    // 尚无数据，先拉取
     fetchData({});
   } else {
     applyFilter();
   }
-}
-
-const LS_KEY_STABLE = 'screener_stable_filters';
-function saveFilters() {
-  const state = {};
-  ['priceMin','priceMax','changeMin','changeMax','volMin','volMax','changeAmtMin','changeAmtMax','symbolInput','timeFrom','timeTo'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) state[id] = el.value;
-  });
-  try { localStorage.setItem(LS_KEY_STABLE, JSON.stringify(state)); } catch(e) {}
-}
-function restoreFilters() {
-  let state;
-  try { state = JSON.parse(localStorage.getItem(LS_KEY_STABLE)); } catch(e) {}
-  if (!state) return;
-  ['priceMin','priceMax','changeMin','changeMax','volMin','volMax','changeAmtMin','changeAmtMax','symbolInput','timeFrom','timeTo'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el && state[id] != null) el.value = state[id];
-  });
 }
 
 // ── APPLY FILTER（只保留6条规则全部通过的）────────────────────────────────
@@ -1005,7 +1049,7 @@ async function diagnoseSymbol() {
   if (isSingle) {
     el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} @ ${singleTime} 快照中…</div>`;
     try {
-      const res  = await fetch(window.API_BASE + `/api/screener-stable/diagnose?symbol=${encodeURIComponent(sym)}&time=${encodeURIComponent(singleTime)}`);
+      const res  = await fetch(`/api/screener-stable/diagnose?symbol=${encodeURIComponent(sym)}&time=${encodeURIComponent(singleTime)}`);
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
       renderDiagnose(sym, singleTime, data);
@@ -1015,7 +1059,7 @@ async function diagnoseSymbol() {
   } else {
     el.innerHTML = `<div style="color:#888;font-size:13px;"><span class="spinner"></span>查询 ${sym} ${from}–${to} 快照中…</div>`;
     try {
-      const res  = await fetch(window.API_BASE + `/api/screener-stable/diagnose-range?symbol=${encodeURIComponent(sym)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+      const res  = await fetch(`/api/screener-stable/diagnose-range?symbol=${encodeURIComponent(sym)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
       renderDiagnoseRange(sym, data);
@@ -1144,7 +1188,7 @@ async function lookupHistory() {
   panel.className = 'history-panel show';
   panel.innerHTML = `<div class="history-empty">正在查询 ${sym} 今日时间点…</div>`;
   try {
-    const res  = await fetch(window.API_BASE + `/api/screener-stable/history?symbol=${encodeURIComponent(sym)}`);
+    const res  = await fetch(`/api/screener-stable/history?symbol=${encodeURIComponent(sym)}`);
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     renderHistory(sym, data);
@@ -1328,9 +1372,9 @@ document.addEventListener('visibilitychange', () => {
  'changeAmtMin','changeAmtMax'].forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
-  el.addEventListener('input',   () => { saveFilters(); run(); });
-  el.addEventListener('change',  () => { saveFilters(); run(); });
-  el.addEventListener('keydown', e => { if (e.key === 'Enter') { saveFilters(); run(); } });
+  el.addEventListener('input',   () => run());
+  el.addEventListener('change',  () => run());
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
 });
 
 const manualBlockInputEl = document.getElementById('manual-block-input');
@@ -1372,7 +1416,9 @@ document.addEventListener('contextmenu', e => {
 });
 
 saveBlocked();
-restoreFilters();
+restoreFiltersFromUrl();
+rememberCurrentUrl();
+hydrateRememberedNavLinks();
 run();
 </script>
 </body>

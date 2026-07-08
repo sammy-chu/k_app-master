@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script>window.API_BASE = window.API_BASE || '';</script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>K线提醒列表</title>
@@ -257,6 +256,43 @@
     </div>
 
     <script>
+        const NAV_STATE_KEY = 'rememberedFilterUrls';
+        const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/abnormal-trades','/boundary-alerts','/oscillator-screener','/l2-alerts','/large-orders','/volatility','/alerts','/volume-alerts','/volume-surge']);
+
+        function readAmplitudeFilterState() {
+            return {
+                amp_min: document.getElementById('amplitude-threshold')?.value.trim() || '',
+                amp_enabled: document.getElementById('enable-amplitude-filter')?.checked ? '1' : ''
+            };
+        }
+        function syncAmplitudeFilterUrl() {
+            const url = new URL(window.location.href);
+            const state = readAmplitudeFilterState();
+            url.searchParams.delete('amp_min');
+            url.searchParams.delete('amp_enabled');
+            if (state.amp_enabled && state.amp_min) url.searchParams.set('amp_min', state.amp_min);
+            if (state.amp_enabled) url.searchParams.set('amp_enabled', state.amp_enabled);
+            window.history.replaceState({}, '', url);
+            rememberCurrentUrl();
+            hydrateRememberedNavLinks();
+        }
+        function loadRememberedNavUrls() {
+            try { return JSON.parse(sessionStorage.getItem(NAV_STATE_KEY) || '{}'); } catch (_) { return {}; }
+        }
+        function hydrateRememberedNavLinks() {
+            const saved = loadRememberedNavUrls();
+            document.querySelectorAll('.nav-links a[href]').forEach(link => {
+                const href = link.getAttribute('href');
+                if (NAV_PERSIST_PATHS.has(href) && saved[href]) link.href = saved[href];
+            });
+        }
+        function rememberCurrentUrl() {
+            const path = window.location.pathname;
+            if (!NAV_PERSIST_PATHS.has(path)) return;
+            const saved = loadRememberedNavUrls();
+            saved[path] = `${path}${window.location.search}${window.location.hash}`;
+            sessionStorage.setItem(NAV_STATE_KEY, JSON.stringify(saved));
+        }
         // 格式化北京时间 - 简化格式
         function formatBeijingTime(isoString) {
             const date = new Date(isoString);
@@ -381,7 +417,7 @@
         // 加载提醒数据
         async function loadAlerts() {
             try {
-                const response = await fetch(window.API_BASE + '/api/alerts?limit=50');
+                const response = await fetch('/api/alerts?limit=50');
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
@@ -409,6 +445,8 @@
         // 页面加载完成后初始化
         document.addEventListener('DOMContentLoaded', function() {
             console.log('Alerts page loaded');
+            rememberCurrentUrl();
+            hydrateRememberedNavLinks();
             
             // 初始化振幅筛选配置
             initAmplitudeFilter();
@@ -476,6 +514,7 @@
                 // 从URL参数读取
                 const urlParams = new URLSearchParams(window.location.search);
                 const ampMinParam = urlParams.get('amp_min');
+                const ampEnabledParam = urlParams.get('amp_enabled');
                 
                 // 从localStorage读取
                 const savedConfig = localStorage.getItem('amplitudeFilterConfig');
@@ -500,6 +539,8 @@
                 }
                 
                 // URL参数优先级更高，但需要验证
+                if (ampEnabledParam === '1') config.enabled = true;
+                if (ampEnabledParam === '0') config.enabled = false;
                 if (ampMinParam !== null) {
                     const threshold = parseFloat(ampMinParam);
                     if (!isNaN(threshold) && threshold >= 0 && threshold <= 100) {
@@ -543,7 +584,11 @@
                 } else {
                     url.searchParams.delete('amp_min');
                 }
+                if (enabled) url.searchParams.set('amp_enabled', '1');
+                else url.searchParams.delete('amp_enabled');
                 window.history.replaceState({}, '', url);
+                rememberCurrentUrl();
+                hydrateRememberedNavLinks();
             }
 
             // 初始更新状态
