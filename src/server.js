@@ -1605,8 +1605,18 @@ function snapshotRowToCamel(s) {
 app.get('/api/active-trading', async (req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT symbol, trade_count, window_secs, first_detected_at, updated_at
-      FROM market_data.active_trading_symbols
+      SELECT 
+        COALESCE(a.symbol, i.symbol) as symbol, 
+        a.trade_count, 
+        a.window_secs, 
+        a.first_detected_at, 
+        a.updated_at,
+        i.iceberg_size,
+        i.iceberg_count,
+        i.iceberg_detected_at,
+        i.updated_at as iceberg_updated_at
+      FROM market_data.active_trading_symbols a
+      FULL OUTER JOIN market_data.iceberg_symbols i ON a.symbol = i.symbol
     `);
 
     const rankingMap = new Map();
@@ -1629,10 +1639,14 @@ app.get('/api/active-trading', async (req, res) => {
 
       results.push({
         symbol,
-        trade_count:       Number(r.trade_count),
-        window_secs:        Number(r.window_secs),
+        trade_count:        r.trade_count != null ? Number(r.trade_count) : null,
+        window_secs:        r.window_secs != null ? Number(r.window_secs) : null,
         first_detected_at:  r.first_detected_at,
         updated_at:         r.updated_at,
+        iceberg_size:       r.iceberg_size != null ? Number(r.iceberg_size) : null,
+        iceberg_count:      r.iceberg_count != null ? Number(r.iceberg_count) : null,
+        iceberg_detected_at: r.iceberg_detected_at,
+        iceberg_updated_at: r.iceberg_updated_at,
         has_market_data:    hasMarketData,
         last_price:         lastPrice,
         total_volume:       totalVolume,
