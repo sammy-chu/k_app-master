@@ -254,7 +254,9 @@
         <input type="text" id="wl-input" placeholder="输入股票代码（逗号或空格分隔批量添加）"
           style="flex:1; background:#1a1a1a; border:1px solid #555; color:#ddd; padding:8px 12px; border-radius:4px; font-size:13px;">
         <button onclick="addWhitelistFromInput()" style="background:#ff9800; color:#fff; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; font-size:13px;">添加</button>
+        <button onclick="document.getElementById('wl-file-input').click()" style="background:#22aa66; color:#fff; border:none; padding:8px 12px; border-radius:4px; cursor:pointer; font-size:13px;">📂 导入</button>
         <button onclick="if(confirm('确认清空白名单？')) { Whitelist.clear(); refreshWhitelistUI(); }" style="background:#555; color:#ddd; border:none; padding:8px 12px; border-radius:4px; cursor:pointer; font-size:13px;">清空</button>
+        <input type="file" id="wl-file-input" accept=".csv,.txt" style="display:none;" onchange="importWhitelistFromFile(event)">
       </div>
       <div id="wl-list" style="display:flex; flex-wrap:wrap; gap:6px; max-height:120px; overflow-y:auto;"></div>
     </div>
