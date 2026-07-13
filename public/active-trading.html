@@ -442,6 +442,7 @@
   </div>
 </div>
 
+<script src="/js/whitelist.js"></script>
 <script>
 // ── STATE ────────────────────────────────────────────────────────────────
 let allData = [];
@@ -537,7 +538,7 @@ async function fetchData() {
     const res = await fetch('/api/active-trading');
     if (!res.ok) throw new Error(res.status);
     const json = await res.json();
-    mergeFreshData(json.symbols || []);
+    mergeFreshData(window.Whitelist ? window.Whitelist.filter(json.symbols || []) : (json.symbols || []));
 
     maxVol = allData.reduce((m, r) => Math.max(m, Number(r.total_volume)||0), 1);
 

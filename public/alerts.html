@@ -255,7 +255,8 @@
         </ul>
     </div>
 
-    <script src="/js/api-fetch.js"></script>
+    <script src="/js/whitelist.js"></script>
+<script src="/js/api-fetch.js"></script>
     <script>
         const NAV_STATE_KEY = 'rememberedFilterUrls';
         const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/abnormal-trades','/boundary-alerts','/oscillator-screener','/l2-alerts','/large-orders','/volatility','/alerts','/volume-alerts','/volume-surge']);
@@ -430,7 +431,8 @@
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
-                const alerts = await response.json();
+                let alerts = await response.json();
+                if (window.Whitelist) alerts = window.Whitelist.filter(alerts);
                 console.log('Loaded alerts:', alerts.length);
                 
                 // 缓存原始数据，避免重复请求

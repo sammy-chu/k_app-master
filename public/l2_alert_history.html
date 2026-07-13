@@ -543,6 +543,7 @@
     </div>
 </div>
 
+<script src="/js/whitelist.js"></script>
 <script>
     let allData = [];
     let sortCol = 'price_ratio';   // 默认按倍数降序，与窗口程序一致
@@ -566,7 +567,8 @@
     async function refreshVolumeSurge() {
         try {
             const res = await fetch('/api/volume-surge-today');
-            const data = await res.json();
+            let data = await res.json();
+            if (window.Whitelist) data = window.Whitelist.filter(data);
             data.forEach(s => volumeSurgeSymbols.add(s)); // 只增不减，当日永久
         } catch (e) {
             console.warn('[VolumeSurge] fetch error:', e);

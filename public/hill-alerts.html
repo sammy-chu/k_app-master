@@ -148,7 +148,8 @@
         <div id="debug-log"></div>
     </div>
 
-    <script>
+    <script src="/js/whitelist.js"></script>
+<script>
         // Global error handler
         window.onerror = function(msg, url, lineNo, columnNo, error) {
             const logEl = document.getElementById('debug-log');
@@ -191,7 +192,8 @@
                 }
                 
                 if (!isBackground) log('Parsing JSON...');
-                const data = await res.json();
+                let data = await res.json();
+                if (window.Whitelist) data = window.Whitelist.filter(data);
                 if (!isBackground) log(`Got ${data ? data.length : 0} records`);
                 
                 renderData(data);

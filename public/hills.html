@@ -135,7 +135,8 @@
         </div>
     </div>
 
-    <script>
+    <script src="/js/whitelist.js"></script>
+<script>
         async function loadData(force = false) {
             const date = document.getElementById('date-picker').value;
             const container = document.getElementById('content');
@@ -160,7 +161,10 @@
 
             try {
                 const res = await fetch(`/api/patterns/flexible-hills?date=${date}`);
-                const json = await res.json();
+                let json = await res.json();
+                if (window.Whitelist && json.data) {
+                    json.data = window.Whitelist.filter(json.data);
+                }
                 
                 // 写入缓存
                 if (json.data) {

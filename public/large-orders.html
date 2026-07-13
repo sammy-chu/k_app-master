@@ -118,7 +118,8 @@
             </tbody>
         </table>
     </div>
-    <script>
+    <script src="/js/whitelist.js"></script>
+<script>
         let fetchTimer;
         let displayedStocks = []; // 前端状态队列，保存已渲染的 symbol
         let expandedSymbols = new Set(); // 记录展开状态的 symbol
@@ -219,6 +220,7 @@
                 const res = await fetch(buildUrl());
                 if (!res.ok) throw new Error('Network response error');
                 let data = await res.json();
+                if (window.Whitelist) data = window.Whitelist.filter(data);
                 
                 // --- 前端过滤：买卖方向 ---
                 const side = document.getElementById('side-filter').value;

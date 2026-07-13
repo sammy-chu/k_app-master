@@ -442,6 +442,7 @@
 </div>
 
 <!-- 横向滚动同步 -->
+<script src="/js/whitelist.js"></script>
 <script>
   document.getElementById('tbodyWrap').addEventListener('scroll', function() {
     document.getElementById('theadWrap').scrollLeft = this.scrollLeft;
@@ -686,6 +687,7 @@
       }
       if (!screenerRes.ok) throw new Error(screenerRes.status);
       allData = await screenerRes.json();
+      if (window.Whitelist) allData = window.Whitelist.filter(allData);
       setCachedData(cacheKey, allData);
       maxVol  = allData.reduce((m,r) => Math.max(m, Number(r.total_volume)||0), 1);
       dot.className = 'status-dot live';

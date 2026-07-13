@@ -546,6 +546,7 @@
   </div>
 </div>
 
+<script src="/js/whitelist.js"></script>
 <script>
 // ── STATE ─────────────────────────────────────────────────────────────────
 let allData    = [];
@@ -818,6 +819,7 @@ async function fetchData() {
     if (!res.ok) throw new Error(res.status);
     const json = await res.json();
     allData = json.alerts || [];
+    if (window.Whitelist) allData = window.Whitelist.filter(allData);
     // 预解析时间戳，避免每次渲染/每秒倒计时都重新 new Date() 解析字符串
     for (const r of allData) {
       r._anchorMs = new Date(r.anchorTime).getTime();

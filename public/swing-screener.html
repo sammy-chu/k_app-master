@@ -443,6 +443,7 @@
 </div>
 
 <!-- 横向滚动同步：thead-wrap 跟随 tbody-wrap -->
+<script src="/js/whitelist.js"></script>
 <script>
   document.getElementById('tbodyWrap').addEventListener('scroll', function() {
     document.querySelector('.thead-wrap').scrollLeft = this.scrollLeft;
@@ -550,6 +551,7 @@
       const res = await fetch(`/api/price-swing-screener?min_volume=${minVol}`);
       if (!res.ok) throw new Error(res.status);
       allData = await res.json();
+      if (window.Whitelist) allData = window.Whitelist.filter(allData);
       maxVol = allData.reduce((m, r) => Math.max(m, Number(r.total_volume) || 0), 1);
       dot.className = 'status-dot live';
       document.getElementById('lastUpdate').textContent =

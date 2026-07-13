@@ -445,7 +445,8 @@
     </div>
   </div>
 
-  <script>
+  <script src="/js/whitelist.js"></script>
+<script>
     const state = {
       mode: 'intra',
       limit: 200,
@@ -750,6 +751,7 @@
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
         state.rows = Array.isArray(payload.rows) ? payload.rows : [];
+        if (window.Whitelist) state.rows = window.Whitelist.filter(state.rows);
         state.total = Number(payload.total || 0);
         state.limit = Number(payload.limit || state.limit);
         state.lastUpdatedAt = new Date();

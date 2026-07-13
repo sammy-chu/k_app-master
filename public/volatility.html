@@ -221,6 +221,7 @@ table.matrix td.hour-end { border-right: 1px solid #30363d; }
   <div class="empty" id="empty-msg">加载中...</div>
 </div>
 
+<script src="/js/whitelist.js"></script>
 <script>
 // ── 状态 ──
 let _autoTimer    = null;
@@ -339,7 +340,8 @@ async function fetchMatrix() {
     const url = `/api/volatility/matrix?date=${date}&min_sigma=${minSigma}`
               + `&from=${from}&to=${to}&limit=${limit}&metric=${metric}&table=${table}`;
     const r    = await fetch(url);
-    const data = await r.json();
+    let data = await r.json();
+    if (window.Whitelist) data = window.Whitelist.filter(data);
     _lastData = data;
     renderMatrix(data, { hideZero });
     // 状态栏:数据源 + 指标 + 维度

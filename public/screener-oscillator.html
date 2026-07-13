@@ -446,6 +446,7 @@
   </div>
 </div>
 
+<script src="/js/whitelist.js"></script>
 <script>
 // ── STATE ─────────────────────────────────────────────────────────────────
 let allData    = [];
@@ -681,6 +682,7 @@ async function fetchData() {
     const res = await fetch(`/api/screener-oscillator${qs ? '?'+qs : ''}`);
     if (!res.ok) throw new Error(res.status);
     allData = await res.json();
+    if (window.Whitelist) allData = window.Whitelist.filter(allData);
     // 预处理：给每行加 triggered_count
     allData = allData.map(row => {
       const triggered_count = WINDOWS.filter(w => row.windows?.[w]?.triggered).length;

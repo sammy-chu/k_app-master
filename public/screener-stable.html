@@ -494,6 +494,7 @@
   </div>
 </div>
 
+<script src="/js/whitelist.js"></script>
 <script>
 // ── STATE ─────────────────────────────────────────────────────────────────
 let allData    = [];   // 全部从接口返回的数据（未过滤）
@@ -828,6 +829,7 @@ async function fetchData(params) {
     const res = await fetch(`/api/screener-stable${qs ? '?'+qs : ''}`);
     if (!res.ok) throw new Error(res.status);
     allData = await res.json();
+    if (window.Whitelist) allData = window.Whitelist.filter(allData);
     maxVol  = allData.reduce((m, r) => Math.max(m, Number(r.total_volume)||0), 1);
     if (dot) dot.className = 'status-dot live';
     if (stxt) stxt.innerHTML = `<span class="status-dot live"></span>实时 · ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;

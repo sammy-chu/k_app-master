@@ -443,7 +443,8 @@
     </div>
   </div>
 
-  <script>
+  <script src="/js/whitelist.js"></script>
+<script>
     let autoRefreshTimer = null;
     let allItems = [];
     let blockedStocks = JSON.parse(localStorage.getItem('sharedBlockedStocks') || '[]');
@@ -632,7 +633,8 @@
       try {
         const res = await fetch(`/api/scanners/BREAKOUT/diagnose?symbol=${encodeURIComponent(sym)}`);
         if (!res.ok) throw new Error(res.status);
-        const data = await res.json();
+        let data = await res.json();
+        if (window.Whitelist) data = window.Whitelist.filter(data);
         
         if (!data.found || !data.history || data.history.length === 0) {
           el.innerHTML = `<div style="color:#888;font-size:13px;">今日暂无 ${sym} 的指标数据。</div>`;
