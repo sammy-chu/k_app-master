@@ -867,6 +867,7 @@
             flashIds = newFlash;
 
             allData = raw;
+            if (window.Whitelist) allData = window.Whitelist.filter(allData, 'stock_code');
             lastRefreshTime = new Date();
             renderTable();
             renderStats();
