@@ -366,7 +366,8 @@
     <a href="/boundary-alerts">边界预警</a>
     <a href="/active-trading">活跃主买</a>
     <a href="/abnormal-trades">异常成交</a>
-  </div>
+    <span id="wl-status" style="font-size:12px;color:#ff9800;margin-left:12px;display:inline-block;vertical-align:middle;"></span>
+    </div>
 
   <div class="header">
     <div class="header-left">
@@ -717,6 +718,20 @@
     }
   });
 
+</script>
+
+<script>
+  (function() {
+    const el = document.getElementById('wl-status');
+    if (!el) return;
+    function update() {
+      if (!window.Whitelist) return;
+      const list = window.Whitelist.get();
+      el.textContent = list.length > 0 ? '白名单: ' + list.length + '只' : '';
+    }
+    update();
+    window.addEventListener('whitelist-changed', update);
+  })();
 </script>
 </body>
 </html>

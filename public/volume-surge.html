@@ -119,7 +119,7 @@
 <body>
 
   <header>
-    <h1>放量监控 <span class="pill" id="count-pill">0</span></h1>
+    <h1>放量监控 <span class="pill" id="count-pill">0</span><span id="wl-status" style="font-size:12px;color:#ff9800;margin-left:12px;display:inline-block;vertical-align:middle;"></span></h1>
     <div class="header-right">
       <span><span class="pulse" id="pulse"></span><span id="status-text">连接中…</span></span>
       <span id="last-update">—</span>
@@ -473,5 +473,18 @@
 })();
 </script>
 
+  <script>
+    (function() {
+      const el = document.getElementById('wl-status');
+      if (!el) return;
+      function update() {
+        if (!window.Whitelist) return;
+        const list = window.Whitelist.get();
+        el.textContent = list.length > 0 ? '白名单: ' + list.length + '只' : '';
+      }
+      update();
+      window.addEventListener('whitelist-changed', update);
+    })();
+  </script>
 </body>
 </html>

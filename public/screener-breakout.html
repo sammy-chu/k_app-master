@@ -315,6 +315,7 @@
       <a href="/">返回首页</a>
       <a href="/screener-breakout" class="active">突破监控 (Breakout)</a>
       <a href="/screener-range">震荡监控 (Range)</a>
+      <span id="wl-status" style="font-size:12px;color:#ff9800;margin-left:12px;display:inline-block;vertical-align:middle;"></span>
     </div>
 
     <div class="header-bar">
@@ -837,5 +838,19 @@
     fetchData();
     autoRefreshTimer = setInterval(fetchData, 15000); // 15秒轮询
   </script>
+
+<script>
+  (function() {
+    const el = document.getElementById('wl-status');
+    if (!el) return;
+    function update() {
+      if (!window.Whitelist) return;
+      const list = window.Whitelist.get();
+      el.textContent = list.length > 0 ? '白名单: ' + list.length + '只' : '';
+    }
+    update();
+    window.addEventListener('whitelist-changed', update);
+  })();
+</script>
 </body>
 </html>
