@@ -168,6 +168,7 @@
 </div>
 
 <script src="/js/api-fetch.js"></script>
+<script src="/js/whitelist.js"></script>
 <script>
     let currentData   = [];
     let symbolStates  = {};
@@ -574,7 +575,9 @@
         const minChgAmt   = parseFloat(document.getElementById('min-change-amt').value);
         const maxChgAmt   = parseFloat(document.getElementById('max-change-amt').value);
 
-        const filteredData = currentData.filter(item => {
+        // ★ 白名单过滤
+        const whitelistedData = Whitelist.filter(currentData);
+        const filteredData = whitelistedData.filter(item => {
             const p      = Number(item.last_price);
             const pct    = Math.abs(Number(item.change_pct));
             const chgAmt = Math.abs(Number(item.change_amount));
