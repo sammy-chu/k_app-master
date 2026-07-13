@@ -241,7 +241,22 @@
       <a href="/hills">山丘扫描</a>
       <a href="/hill-alerts">山丘提醒</a>
       <a href="/volatility">波动率</a>
-      <a href="/frontend_monitoring_features.md" target="_blank" style="margin-left: auto; border-color: #555; color: #aaa;">📖 页面功能文档</a>
+      <a href="javascript:void(0)" id="btn-whitelist" onclick="toggleWhitelistPanel()" style="border-color:#ff9800;color:#ff9800;">⚙ 白名单</a>
+    </div>
+
+    <!-- Whitelist Management Panel -->
+    <div id="whitelist-panel" style="display:none; background:#242424; border:1px solid #444; border-radius:8px; padding:16px; margin-bottom:20px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <span style="font-size:15px; font-weight:600; color:#ff9800;">白名单管理</span>
+        <span id="wl-count" style="font-size:12px; color:#888;">0 只股票</span>
+      </div>
+      <div style="display:flex; gap:8px; margin-bottom:12px;">
+        <input type="text" id="wl-input" placeholder="输入股票代码（逗号或空格分隔批量添加）"
+          style="flex:1; background:#1a1a1a; border:1px solid #555; color:#ddd; padding:8px 12px; border-radius:4px; font-size:13px;">
+        <button onclick="addWhitelistFromInput()" style="background:#ff9800; color:#fff; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; font-size:13px;">添加</button>
+        <button onclick="if(confirm('确认清空白名单？')) { Whitelist.clear(); refreshWhitelistUI(); }" style="background:#555; color:#ddd; border:none; padding:8px 12px; border-radius:4px; cursor:pointer; font-size:13px;">清空</button>
+      </div>
+      <div id="wl-list" style="display:flex; flex-wrap:wrap; gap:6px; max-height:120px; overflow-y:auto;"></div>
     </div>
 
     <!-- Header -->
@@ -365,8 +380,42 @@
       </div>
     </div>
 
+    <script src="js/whitelist.js"></script>
     <script>
       const API = window.API_BASE;
+
+      // ── Whitelist UI ──────────────────────────────────────────────
+      function toggleWhitelistPanel() {
+        const panel = document.getElementById('whitelist-panel');
+        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        if (panel.style.display === 'block') refreshWhitelistUI();
+      }
+
+      function addWhitelistFromInput() {
+        const input = document.getElementById('wl-input');
+        const symbols = input.value.split(/[,，\s\n]+/).filter(Boolean);
+        symbols.forEach(s => Whitelist.add(s));
+        input.value = '';
+        refreshWhitelistUI();
+      }
+
+      function refreshWhitelistUI() {
+        const list = Whitelist.get();
+        document.getElementById('wl-count').textContent = list.length > 0 ? list.length + ' 只股票' : '未启用（显示全部）';
+        const container = document.getElementById('wl-list');
+        container.innerHTML = list.map(s => `<span style="background:#333;padding:4px 10px;border-radius:4px;font-size:12px;color:#ddd;display:inline-flex;align-items:center;gap:6px;">${s}<span onclick="Whitelist.remove('${s}');refreshWhitelistUI();" style="cursor:pointer;color:#ef5350;font-weight:bold;">×</span></span>`).join('');
+        // 更新按钮状态
+        const btn = document.getElementById('btn-whitelist');
+        if (btn) btn.textContent = list.length > 0 ? `⚙ 白名单(${list.length})` : '⚙ 白名单';
+      }
+
+      // 页面加载时初始化按钮显示
+      refreshWhitelistUI();
+
+      // Enter 键支持
+      document.getElementById('wl-input')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') addWhitelistFromInput();
+      });
 
       // Helpers
       function fmt(n, d = 2) {
@@ -393,8 +442,11 @@
         try {
           const res = await fetch(API + '/api/ranking');
           if (!res.ok) return;
-          const data = await res.json();
+          let data = await res.json();
           if (!Array.isArray(data)) return;
+
+          // ★ 白名单过滤
+          data = Whitelist.filter(data);
 
           // Overview cards
           let up = 0, down = 0, flat = 0;
@@ -461,7 +513,8 @@
           const count = data.count || 0;
           document.getElementById('card-boundary').textContent = count;
           setBadge('sig-boundary', count);
-          return data.alerts || [];
+          const alerts = Whitelist.filter(data.alerts || []);
+          return alerts;
         } catch (e) {
           console.error('[Boundary]', e);
           return [];
@@ -478,7 +531,8 @@
           setBadge('sig-active', count);
 
           // Active table - top 10
-          const top10 = (data.symbols || []).slice(0, 10);
+          const filtered = Whitelist.filter(data.symbols || []);
+          const top10 = filtered.slice(0, 10);
           const tbody = document.querySelector('#tbl-active tbody');
           if (top10.length === 0) {
             tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;">暂无活跃股票</td></tr>';
