@@ -411,6 +411,33 @@
         if (btn) btn.textContent = list.length > 0 ? `⚙ 白名单(${list.length})` : '⚙ 白名单';
       }
 
+      function importWhitelistFromFile(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const text = e.target.result;
+          // 兼容多种分隔：换行、逗号、空格
+          const symbols = text.split(/[,，\s\n\r]+/)
+            .map(s => s.trim())
+            .filter(Boolean);
+
+          if (symbols.length === 0) {
+            alert('文件中未找到有效的股票代码');
+            return;
+          }
+
+          Whitelist.set(symbols); // 替换覆盖模式
+          refreshWhitelistUI();
+          alert('已导入 ' + Whitelist.get().length + ' 只股票（替换模式）');
+        };
+
+        reader.readAsText(file);
+        // 重置 input，允许重复选择同一文件
+        event.target.value = '';
+      }
+
       // 页面加载时初始化按钮显示
       refreshWhitelistUI();
 
