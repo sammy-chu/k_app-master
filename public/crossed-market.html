@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>倒挂监控</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1a1a1a;
+            color: #ddd;
+            padding: 20px;
+        }
+        .container { max-width: 1800px; margin: 0 auto; }
+
+        .nav-links { text-align: center; margin-bottom: 30px; }
+        .nav-links a {
+            color: #007acc; text-decoration: none; padding: 8px 16px;
+            margin: 0 10px; border: 1px solid #007acc; border-radius: 4px;
+            transition: all 0.2s; display: inline-block;
+        }
+        .nav-links a:hover { background-color: #007acc; color: white; }
+        .nav-links a.active { background-color: #007acc; color: white; }
+
+        .header-bar {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 16px; border-bottom: 1px solid #333; padding-bottom: 14px;
+        }
+        .title { font-size: 1.4em; color: #ddd; font-weight: normal; }
+        .refresh-info { font-size: 12px; color: #666; }
+
+        .section-title {
+            font-size: 1.1em; color: #ccc; margin: 20px 0 10px;
+            padding-bottom: 6px; border-bottom: 1px solid #333;
+        }
+        .section-title .count { color: #ef5350; font-weight: 700; margin-left: 8px; }
+
+        .filter-bar {
+            display: flex; gap: 12px; align-items: center;
+            background: #2a2a2a; padding: 10px 14px; border-radius: 4px;
+            margin-bottom: 14px; flex-wrap: wrap;
+        }
+        .filter-group { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #aaa; }
+        .filter-group select, .filter-group input {
+            background: #1a1a1a; border: 1px solid #444; color: #ddd;
+            padding: 4px 8px; border-radius: 3px; font-size: 13px;
+        }
+
+        table {
+            width: 100%; border-collapse: collapse; background: #252525;
+            border-radius: 8px; overflow: hidden; font-size: 13px;
+        }
+        th, td { padding: 9px 12px; text-align: right; border-bottom: 1px solid #2e2e2e; }
+        th {
+            background: #2f2f2f; color: #999; font-weight: 600; font-size: 12px;
+            position: sticky; top: 0; z-index: 1; cursor: pointer; user-select: none;
+        }
+        th:hover { color: #ccc; }
+        th.sorted { color: #007acc; }
+        th:first-child, td:first-child { text-align: center; width: 36px; color: #555; }
+        th:nth-child(2), td:nth-child(2) { text-align: left; }
+        tr:last-child td { border-bottom: none; }
+        tr:hover { background: #2a2a2a; }
+
+        .symbol { font-weight: 600; color: #fff; }
+        .spread-val { color: #ef5350; font-weight: 700; }
+        .duration-val { color: #faac30; }
+        .time-cell { color: #666; font-size: 12px; white-space: nowrap; }
+        .active-row { border-left: 3px solid #ef5350; background: rgba(239,83,80,0.08) !important; }
+        .active-row:hover { background: rgba(239,83,80,0.14) !important; }
+
+        .empty { text-align: center; padding: 30px; color: #555; font-size: 13px; }
+        .no-alert { text-align: center; padding: 20px; color: #26a69a; font-size: 14px; }
+        .loading { text-align: center; padding: 40px; color: #666; }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <div class="nav-links">
+        <a href="/alerts">价格提醒</a>
+        <a href="/volume-alerts">放量提醒</a>
+        <a href="/hills">山丘形态</a>
+        <a href="/ranking">涨跌排名</a>
+        <a href="/l2-alerts">L2大单</a>
+        <a href="/crossed-market" class="active">倒挂监控</a>
+        <a href="/screener">选股器</a>
+        <a href="/boundary-alerts">边界预警</a>
+        <a href="/active-trading">活跃主买</a>
+        <a href="/abnormal-trades">异常成交</a>
+    </div>
+
+    <div class="header-bar">
+        <h1 class="title">Crossed Market 倒挂监控</h1>
+        <span class="refresh-info" id="refresh-info">活跃区每 1s 刷新</span>
+    </div>
+
+    <!-- 筛选栏 -->
+    <div class="filter-bar">
+        <div class="filter-group">
+            <label>代码</label>
+            <input type="text" id="filter-symbol" placeholder="如 AAPL" style="width:110px">
+        </div>
+        <div class="filter-group">
+            <label>历史范围</label>
+            <select id="filter-hours">
+                <option value="1">近1小时</option>
+                <option value="6">近6小时</option>
+                <option value="24" selected>近24小时</option>
+                <option value="168">近7天</option>
+            </select>
+        </div>
+        <div class="filter-group"> 
+            <label>成交量</label> 
+            <input type="number" id="filter-min-vol" placeholder="最小" style="width:70px" min="0" step="100"> 
+            <span style="color:#666">-</span> 
+            <input type="number" id="filter-max-vol" placeholder="最大" style="width:70px" min="0" step="100"> 
+        </div> 
+    </div>
+
+    <!-- 活跃倒挂区 -->
+    <h2 class="section-title">🔴 当前活跃倒挂 <span class="count" id="active-count"></span></h2>
+    <div id="active-content"><div class="loading">加载中...</div></div>
+
+    <!-- 历史记录区 -->
+    <h2 class="section-title" style="margin-top:30px">📋 历史记录</h2>
+    <div id="history-content"><div class="loading">加载中...</div></div>
+
+</div>
+
+<script>
+    let activeData = [];
+    let historyData = [];
+    let historySortCol = 'detected_at';
+    let historySortDir = 'desc';
+
+    function getSymbol() {
+        return document.getElementById('filter-symbol').value.trim().toUpperCase();
+    }
+    function getHours() {
+        return document.getElementById('filter-hours').value;
+    }
+    function getMinVol() { return document.getElementById('filter-min-vol').value.trim(); } 
+    function getMaxVol() { return document.getElementById('filter-max-vol').value.trim(); } 
+
+    function fmtPrice(v) { return Number(v).toFixed(4); }
+    function fmtSpread(v) { return Number(v).toFixed(4); }
+    function fmtVol(v) { 
+        if (v == null) return '—'; 
+        v = Number(v); 
+        return isNaN(v) ? '—' : v.toLocaleString(); 
+    } 
+    function fmtMmids(jsonb) { 
+        if (!jsonb || !Array.isArray(jsonb) || jsonb.length === 0) return '—'; 
+        return jsonb.join(', '); 
+    } 
+    function fmtTime(s) {
+        if (!s) return '—';
+        return new Date(s).toLocaleString('zh-CN', { hour12: false, month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    }
+    function fmtDuration(row) {
+        if (row.duration_sec != null) {
+            const s = Number(row.duration_sec);
+            if (s < 60) return s.toFixed(1) + 's';
+            return Math.floor(s/60) + 'm' + Math.round(s%60) + 's';
+        }
+        // 活跃中：实时计算
+        if (row.detected_at) {
+            const s = (Date.now() - new Date(row.detected_at).getTime()) / 1000;
+            if (s < 60) return Math.floor(s) + 's';
+            if (s < 3600) return Math.floor(s/60) + 'm' + String(Math.floor(s%60)).padStart(2,'0') + 's';
+            return Math.floor(s/3600) + 'h' + String(Math.floor((s%3600)/60)).padStart(2,'0') + 'm';
+        }
+        return '—';
+    }
+
+    // ── 活跃区 ──
+    async function fetchActive() {
+        try {
+            const symbol = getSymbol();
+            let url = '/api/crossed-market-alerts?status=active';
+            if (symbol) url += '&symbol=' + encodeURIComponent(symbol);
+            const minV = getMinVol(), maxV = getMaxVol(); 
+            if (minV) url += '&min_volume=' + minV; 
+            if (maxV) url += '&max_volume=' + maxV; 
+            const res = await fetch(url);
+            activeData = await res.json();
+            renderActive();
+        } catch (e) { console.error('fetchActive:', e); }
+    }
+
+    function renderActive() {
+        const el = document.getElementById('active-content');
+        document.getElementById('active-count').textContent = activeData.length > 0 ? activeData.length + ' 只' : '';
+        if (!activeData.length) {
+            el.innerHTML = '<div class="no-alert">✓ 当前无倒挂事件</div>';
+            return;
+        }
+        let html = `<table><thead><tr>
+            <th>#</th><th>Symbol</th><th>Bid</th><th>Ask</th><th>Spread</th>
+            <th>L2 Bid</th><th>L2 Ask</th><th>Bid MMs</th><th>Ask MMs</th><th>成交量</th>
+            <th>持续时间</th><th>发现时间</th>
+        </tr></thead><tbody>`;
+        activeData.forEach((r, i) => {
+            html += `<tr class="active-row">
+                <td>${i+1}</td>
+                <td><span class="symbol">${r.symbol}</span></td>
+                <td>${fmtPrice(r.bid)}</td>
+                <td>${fmtPrice(r.ask)}</td>
+                <td><span class="spread-val">${fmtSpread(r.spread)}</span></td>
+                <td>${fmtPrice(r.l2_best_bid)}</td> 
+                <td>${fmtPrice(r.l2_best_ask)}</td> 
+                <td style="text-align:left;font-size:11px;color:#aaa;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${fmtMmids(r.bid_mmids)}">${fmtMmids(r.bid_mmids)}</td> 
+                <td style="text-align:left;font-size:11px;color:#aaa;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${fmtMmids(r.ask_mmids)}">${fmtMmids(r.ask_mmids)}</td> 
+                <td>${fmtVol(r.volume)}</td> 
+                <td><span class="duration-val">${fmtDuration(r)}</span></td>
+                <td class="time-cell">${fmtTime(r.detected_at)}</td>
+            </tr>`;
+        });
+        html += '</tbody></table>';
+        el.innerHTML = html;
+    }
+
+    // ── 历史区 ──
+    async function fetchHistory() {
+        try {
+            const symbol = getSymbol();
+            const hours = getHours();
+            let url = `/api/crossed-market-alerts?status=recovered&hours=${hours}&limit=200&sort=${historySortCol}&order=${historySortDir}`;
+            if (symbol) url += '&symbol=' + encodeURIComponent(symbol);
+            const minV = getMinVol(), maxV = getMaxVol(); 
+            if (minV) url += '&min_volume=' + minV; 
+            if (maxV) url += '&max_volume=' + maxV; 
+            const res = await fetch(url);
+            historyData = await res.json();
+            renderHistory();
+        } catch (e) { console.error('fetchHistory:', e); }
+    }
+
+    function renderHistory() {
+        const el = document.getElementById('history-content');
+        if (!historyData.length) {
+            el.innerHTML = '<div class="empty">暂无历史记录</div>';
+            return;
+        }
+        const thIcon = col => historySortCol !== col ? '<span style="color:#444">↕</span>' : (historySortDir === 'desc' ? '↓' : '↑');
+        const thCls = col => historySortCol === col ? 'sorted' : '';
+        let html = `<table><thead><tr>
+            <th>#</th>
+            <th>Symbol</th>
+            <th onclick="sortHistory('bid')" class="${thCls('bid')}">Bid ${thIcon('bid')}</th>
+            <th onclick="sortHistory('ask')" class="${thCls('ask')}">Ask ${thIcon('ask')}</th>
+            <th onclick="sortHistory('spread')" class="${thCls('spread')}">Spread ${thIcon('spread')}</th>
+            <th>L2 Bid</th><th>L2 Ask</th><th>Bid MMs</th><th>Ask MMs</th>
+            <th onclick="sortHistory('volume')" class="${thCls('volume')}">成交量 ${thIcon('volume')}</th>
+            <th onclick="sortHistory('duration_sec')" class="${thCls('duration_sec')}">持续时间 ${thIcon('duration_sec')}</th>
+            <th onclick="sortHistory('detected_at')" class="${thCls('detected_at')}">发现时间 ${thIcon('detected_at')}</th>
+            <th>恢复时间</th>
+        </tr></thead><tbody>`;
+        historyData.forEach((r, i) => {
+            html += `<tr>
+                <td>${i+1}</td>
+                <td><span class="symbol">${r.symbol}</span></td>
+                <td>${fmtPrice(r.bid)}</td>
+                <td>${fmtPrice(r.ask)}</td>
+                <td><span class="spread-val">${fmtSpread(r.spread)}</span></td>
+                <td>${fmtPrice(r.l2_best_bid)}</td> 
+                <td>${fmtPrice(r.l2_best_ask)}</td> 
+                <td style="text-align:left;font-size:11px;color:#aaa;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${fmtMmids(r.bid_mmids)}">${fmtMmids(r.bid_mmids)}</td> 
+                <td style="text-align:left;font-size:11px;color:#aaa;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${fmtMmids(r.ask_mmids)}">${fmtMmids(r.ask_mmids)}</td> 
+                <td>${fmtVol(r.volume)}</td> 
+                <td><span class="duration-val">${fmtDuration(r)}</span></td>
+                <td class="time-cell">${fmtTime(r.detected_at)}</td>
+                <td class="time-cell">${fmtTime(r.recovered_at)}</td>
+            </tr>`;
+        });
+        html += '</tbody></table>';
+        el.innerHTML = html;
+    }
+
+    function sortHistory(col) {
+        historySortDir = historySortCol === col ? (historySortDir === 'desc' ? 'asc' : 'desc') : 'desc';
+        historySortCol = col;
+        fetchHistory();
+    }
+
+    // ── 事件绑定 ──
+    document.getElementById('filter-symbol').addEventListener('input', () => { fetchActive(); fetchHistory(); });
+    document.getElementById('filter-hours').addEventListener('change', fetchHistory);
+    document.getElementById('filter-min-vol').addEventListener('input', () => { fetchActive(); fetchHistory(); }); 
+    document.getElementById('filter-max-vol').addEventListener('input', () => { fetchActive(); fetchHistory(); });
+
+    // ── 启动 ──
+    fetchActive();
+    fetchHistory();
+
+    // 活跃区 1s 轮询
+    setInterval(fetchActive, 1000);
+    // 活跃区持续时间实时更新（不重新 fetch，仅重渲染）
+    setInterval(renderActive, 1000);
+</script>
+</body>
+</html>
