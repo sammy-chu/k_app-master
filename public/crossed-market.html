@@ -170,17 +170,18 @@
         v = Number(v); 
         return isNaN(v) ? '—' : v.toLocaleString(); 
     } 
-    function fmtMmids(jsonb) { 
-        if (!jsonb) return '—'; 
-        let arr = jsonb; 
+    function parseMmids(jsonb) { 
+        if (!jsonb) return []; 
+        if (Array.isArray(jsonb)) return jsonb; 
         if (typeof jsonb === 'string') { 
-            try { arr = JSON.parse(jsonb); } catch(e) { return jsonb; } 
+            try { return JSON.parse(jsonb); } catch(e) { return []; } 
         } 
-        if (!Array.isArray(arr) || arr.length === 0) return '—'; 
-        return arr.map(item => { 
-            if (Array.isArray(item)) return item[0] + ':' + item[1]; 
-            return String(item); 
-        }).join(', '); 
+        return []; 
+    } 
+    function fmtMmids(jsonb) { 
+        const arr = parseMmids(jsonb); 
+        if (arr.length === 0) return '—'; 
+        return arr.map(item => Array.isArray(item) ? item[0] + ':' + item[1] : String(item)).join(', '); 
     } 
     function fmtTime(s) {
         if (!s) return '—';
@@ -207,8 +208,8 @@
         const mode = document.getElementById('filter-mmids').value; 
         if (mode === 'all') return data; 
         return data.filter(r => { 
-            const bidCount = Array.isArray(r.bid_mmids) ? r.bid_mmids.length : 0; 
-            const askCount = Array.isArray(r.ask_mmids) ? r.ask_mmids.length : 0; 
+            const bidCount = parseMmids(r.bid_mmids).length; 
+            const askCount = parseMmids(r.ask_mmids).length; 
             if (mode === 'single') return bidCount <= 1 && askCount <= 1; 
             if (mode === 'multi') return bidCount > 1 || askCount > 1; 
             return true; 
