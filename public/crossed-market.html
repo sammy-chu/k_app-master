@@ -152,8 +152,16 @@
         return isNaN(v) ? '—' : v.toLocaleString(); 
     } 
     function fmtMmids(jsonb) { 
-        if (!jsonb || !Array.isArray(jsonb) || jsonb.length === 0) return '—'; 
-        return jsonb.join(', '); 
+        if (!jsonb) return '—'; 
+        let arr = jsonb; 
+        if (typeof jsonb === 'string') { 
+            try { arr = JSON.parse(jsonb); } catch(e) { return jsonb; } 
+        } 
+        if (!Array.isArray(arr) || arr.length === 0) return '—'; 
+        return arr.map(item => { 
+            if (Array.isArray(item)) return item[0] + ':' + item[1]; 
+            return String(item); 
+        }).join(', '); 
     } 
     function fmtTime(s) {
         if (!s) return '—';
