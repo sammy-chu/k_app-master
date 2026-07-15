@@ -126,7 +126,15 @@
             <label>成交量</label> 
             <input type="number" id="filter-min-vol" placeholder="最小" style="width:70px" min="0" step="100"> 
             <span style="color:#666">-</span> 
-            <input type="number" id="filter-max-vol" placeholder="最大" style="width:70px" min="0" step="100"> 
+            <input type="number" id="filter-max-vol" value="100000" style="width:70px" min="0" step="100"> 
+        </div> 
+        <div class="filter-group"> 
+            <label>做市商</label> 
+            <select id="filter-mmids"> 
+                <option value="all">全部</option> 
+                <option value="single" selected>仅单一做市商</option> 
+                <option value="multi">仅多做市商</option> 
+            </select> 
         </div> 
     </div>
 
@@ -194,6 +202,19 @@
         return '—';
     }
 
+    // ── 前端过滤 ── 
+    function filterByMmids(data) { 
+        const mode = document.getElementById('filter-mmids').value; 
+        if (mode === 'all') return data; 
+        return data.filter(r => { 
+            const bidCount = Array.isArray(r.bid_mmids) ? r.bid_mmids.length : 0; 
+            const askCount = Array.isArray(r.ask_mmids) ? r.ask_mmids.length : 0; 
+            if (mode === 'single') return bidCount <= 1 && askCount <= 1; 
+            if (mode === 'multi') return bidCount > 1 || askCount > 1; 
+            return true; 
+        }); 
+    } 
+
     // ── 活跃区 ──
     async function fetchActive() {
         try {
@@ -211,8 +232,9 @@
 
     function renderActive() {
         const el = document.getElementById('active-content');
-        document.getElementById('active-count').textContent = activeData.length > 0 ? activeData.length + ' 只' : '';
-        if (!activeData.length) {
+        const filtered = filterByMmids(activeData); 
+        document.getElementById('active-count').textContent = filtered.length > 0 ? filtered.length + ' 只' : ''; 
+        if (!filtered.length) { 
             el.innerHTML = '<div class="no-alert">✓ 当前无倒挂事件</div>';
             return;
         }
@@ -221,7 +243,7 @@
             <th>L2 Bid</th><th>L2 Ask</th><th style="text-align:left;width:180px">Bid MMs</th><th style="text-align:left;width:180px">Ask MMs</th><th>成交量</th>
             <th>持续时间</th><th>发现时间</th>
         </tr></thead><tbody>`;
-        activeData.forEach((r, i) => {
+        filtered.forEach((r, i) => {
             html += `<tr class="active-row">
                 <td>${i+1}</td>
                 <td><span class="symbol">${r.symbol}</span></td>
@@ -259,7 +281,8 @@
 
     function renderHistory() {
         const el = document.getElementById('history-content');
-        if (!historyData.length) {
+        const filtered = filterByMmids(historyData); 
+        if (!filtered.length) { 
             el.innerHTML = '<div class="empty">暂无历史记录</div>';
             return;
         }
@@ -277,7 +300,7 @@
             <th onclick="sortHistory('detected_at')" class="${thCls('detected_at')}">发现时间 ${thIcon('detected_at')}</th>
             <th>恢复时间</th>
         </tr></thead><tbody>`;
-        historyData.forEach((r, i) => {
+        filtered.forEach((r, i) => {
             html += `<tr>
                 <td>${i+1}</td>
                 <td><span class="symbol">${r.symbol}</span></td>
@@ -309,6 +332,7 @@
     document.getElementById('filter-hours').addEventListener('change', fetchHistory);
     document.getElementById('filter-min-vol').addEventListener('input', () => { fetchActive(); fetchHistory(); }); 
     document.getElementById('filter-max-vol').addEventListener('input', () => { fetchActive(); fetchHistory(); });
+    document.getElementById('filter-mmids').addEventListener('change', () => { renderActive(); renderHistory(); }); 
 
     // ── 启动 ──
     fetchActive();
