@@ -4608,6 +4608,76 @@ app.get('/api/scanners/:type', async (req, res) => {
   }
 });
 
+// === Crossed Market Alert API ===
+app.get('/api/crossed-market-alerts', async (req, res) => {
+  try {
+    const symbol = (req.query.symbol || '').trim().toUpperCase();
+    const status = req.query.status || 'all'; // active | recovered | all
+    const hours  = parseInt(req.query.hours) || 24;
+    const limit  = Math.min(parseInt(req.query.limit) || 100, 500);
+    const sort   = ['spread', 'duration_sec', 'detected_at', 'volume'].includes(req.query.sort)
+      ? req.query.sort : 'detected_at';
+    const order  = req.query.order === 'asc' ? 'ASC' : 'DESC';
+
+    const conditions = [];
+    const params = [];
+    let paramIdx = 0;
+
+    // 时间范围（仅对 recovered 和 all 生效）
+    if (status !== 'active') {
+      paramIdx++;
+      conditions.push(`detected_at > NOW() - interval '1 hour' * $${paramIdx}`);
+      params.push(hours);
+    }
+
+    // symbol 过滤
+    if (symbol) {
+      paramIdx++;
+      conditions.push(`symbol ILIKE $${paramIdx}`);
+      params.push(`%${symbol}%`);
+    }
+
+    // 成交量过滤 
+    const minVol = parseFloat(req.query.min_volume); 
+    const maxVol = parseFloat(req.query.max_volume); 
+    if (!isNaN(minVol) && minVol > 0) { 
+      paramIdx++; 
+      conditions.push(`volume >= $${paramIdx}`); 
+      params.push(minVol); 
+    } 
+    if (!isNaN(maxVol) && maxVol > 0) { 
+      paramIdx++; 
+      conditions.push(`volume <= $${paramIdx}`); 
+      params.push(maxVol); 
+    } 
+
+    // 状态过滤
+    if (status === 'active') {
+      conditions.push('recovered_at IS NULL');
+    } else if (status === 'recovered') {
+      conditions.push('recovered_at IS NOT NULL');
+    }
+
+    const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+
+    paramIdx++;
+    const sql = `
+      SELECT id, symbol, bid, ask, spread, l2_best_bid, l2_best_ask, bid_mmids, ask_mmids, volume, detected_at, recovered_at, duration_sec
+      FROM crossed_market_alert
+      ${where}
+      ORDER BY ${sort} ${order}
+      LIMIT $${paramIdx}
+    `;
+    params.push(limit);
+
+    const result = await pool.query(sql, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('[crossed-market-alerts] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 静态文件服务
 app.use(express.static(path.join(__dirname, '../public'), {
     setHeaders: (res) => {
@@ -4633,6 +4703,7 @@ app.get('/abnormal-trades',     (req, res) => res.sendFile(path.join(__dirname, 
 app.get('/volume-chart',        (req, res) => res.sendFile(path.join(__dirname, '../public/volume-chart.html')));
 app.get('/screener-breakout',   (req, res) => res.sendFile(path.join(__dirname, '../public/screener-breakout.html')));
 app.get('/screener-range',      (req, res) => res.sendFile(path.join(__dirname, '../public/screener-range.html')));
+app.get('/crossed-market',      (req, res) => res.sendFile(path.join(__dirname, '../public/crossed-market.html')));
 
 // [PERF] ensureTables 默认跳过（仅 ENSURE_TABLES=1 时执行 DDL），不阻塞 startAlertMonitor
 ensureTables().then(() => {
