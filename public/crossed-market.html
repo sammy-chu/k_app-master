@@ -67,6 +67,17 @@
         .spread-val { color: #ef5350; font-weight: 700; }
         .duration-val { color: #faac30; }
         .time-cell { color: #666; font-size: 12px; white-space: nowrap; }
+        .mmid-cell { 
+            text-align: left; 
+            font-size: 11px; 
+            color: #aaa; 
+            width: 180px; 
+            min-width: 180px; 
+            max-width: 180px; 
+            overflow: hidden; 
+            text-overflow: ellipsis; 
+            white-space: nowrap; 
+        }
         .active-row { border-left: 3px solid #ef5350; background: rgba(239,83,80,0.08) !important; }
         .active-row:hover { background: rgba(239,83,80,0.14) !important; }
 
@@ -207,7 +218,7 @@
         }
         let html = `<table><thead><tr>
             <th>#</th><th>Symbol</th><th>Bid</th><th>Ask</th><th>Spread</th>
-            <th>L2 Bid</th><th>L2 Ask</th><th>Bid MMs</th><th>Ask MMs</th><th>成交量</th>
+            <th>L2 Bid</th><th>L2 Ask</th><th style="text-align:left;width:180px">Bid MMs</th><th style="text-align:left;width:180px">Ask MMs</th><th>成交量</th>
             <th>持续时间</th><th>发现时间</th>
         </tr></thead><tbody>`;
         activeData.forEach((r, i) => {
@@ -219,8 +230,8 @@
                 <td><span class="spread-val">${fmtSpread(r.spread)}</span></td>
                 <td>${fmtPrice(r.l2_best_bid)}</td> 
                 <td>${fmtPrice(r.l2_best_ask)}</td> 
-                <td style="text-align:left;font-size:11px;color:#aaa;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${fmtMmids(r.bid_mmids)}">${fmtMmids(r.bid_mmids)}</td> 
-                <td style="text-align:left;font-size:11px;color:#aaa;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${fmtMmids(r.ask_mmids)}">${fmtMmids(r.ask_mmids)}</td> 
+                <td class="mmid-cell" title="${fmtMmids(r.bid_mmids)}">${fmtMmids(r.bid_mmids)}</td> 
+                <td class="mmid-cell" title="${fmtMmids(r.ask_mmids)}">${fmtMmids(r.ask_mmids)}</td> 
                 <td>${fmtVol(r.volume)}</td> 
                 <td><span class="duration-val">${fmtDuration(r)}</span></td>
                 <td class="time-cell">${fmtTime(r.detected_at)}</td>
@@ -260,7 +271,7 @@
             <th onclick="sortHistory('bid')" class="${thCls('bid')}">Bid ${thIcon('bid')}</th>
             <th onclick="sortHistory('ask')" class="${thCls('ask')}">Ask ${thIcon('ask')}</th>
             <th onclick="sortHistory('spread')" class="${thCls('spread')}">Spread ${thIcon('spread')}</th>
-            <th>L2 Bid</th><th>L2 Ask</th><th>Bid MMs</th><th>Ask MMs</th>
+            <th>L2 Bid</th><th>L2 Ask</th><th style="text-align:left;width:180px">Bid MMs</th><th style="text-align:left;width:180px">Ask MMs</th>
             <th onclick="sortHistory('volume')" class="${thCls('volume')}">成交量 ${thIcon('volume')}</th>
             <th onclick="sortHistory('duration_sec')" class="${thCls('duration_sec')}">持续时间 ${thIcon('duration_sec')}</th>
             <th onclick="sortHistory('detected_at')" class="${thCls('detected_at')}">发现时间 ${thIcon('detected_at')}</th>
@@ -275,8 +286,8 @@
                 <td><span class="spread-val">${fmtSpread(r.spread)}</span></td>
                 <td>${fmtPrice(r.l2_best_bid)}</td> 
                 <td>${fmtPrice(r.l2_best_ask)}</td> 
-                <td style="text-align:left;font-size:11px;color:#aaa;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${fmtMmids(r.bid_mmids)}">${fmtMmids(r.bid_mmids)}</td> 
-                <td style="text-align:left;font-size:11px;color:#aaa;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${fmtMmids(r.ask_mmids)}">${fmtMmids(r.ask_mmids)}</td> 
+                <td class="mmid-cell" title="${fmtMmids(r.bid_mmids)}">${fmtMmids(r.bid_mmids)}</td> 
+                <td class="mmid-cell" title="${fmtMmids(r.ask_mmids)}">${fmtMmids(r.ask_mmids)}</td> 
                 <td>${fmtVol(r.volume)}</td> 
                 <td><span class="duration-val">${fmtDuration(r)}</span></td>
                 <td class="time-cell">${fmtTime(r.detected_at)}</td>
