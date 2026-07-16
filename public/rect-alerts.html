@@ -62,6 +62,9 @@
   <div class="header-bar"> 
     <span class="title">📐 矩形区间实时监控</span> 
     <span class="stats"> 
+      <label style="margin-right: 15px; cursor: pointer; color: #ddd; font-size: 13px;">
+        <input type="checkbox" id="filter-semicond" checked style="margin-right: 4px;">仅显示半导体/热门股票
+      </label>
       <span class="ws-status" id="ws-dot"></span> 
       Active: <span class="active-count" id="active-count">0</span> | 
       Broken: <span class="broken-count" id="broken-count">0</span> | 
@@ -93,6 +96,17 @@
 
 <script> 
 const signals = new Map(); // key: symbol_rect_start 
+
+const semicondSet = new Set([
+  'NVDA.BL', 'AMD.BL', 'TSM.BL', 'AVGO.BL', 'INTC.BL', 'QCOM.BL', 'MU.BL', 'AMAT.BL', 'TXN.BL',
+  'KLAC.BL', 'LRCX.BL', 'ASML.BL', 'ARM.BL', 'MRVL.BL', 'NXPI.BL', 'SWKS.BL', 'MCHP.BL', 'ON.BL',
+  'MDB.BL', 'MPWR.BL', 'WDC.BL', 'ALTR.BL', 'SYNA.BL', 'CRUS.BL', 'QRVO.BL', 'LSCC.BL', 'SLAB.BL',
+  'DIOD.BL', 'PI.BL', 'POWI.BL', 'RMBS.BL', 'WOLF.BL', 'SGH.BL', 'ENTG.BL', 'AMKR.BL', 'TER.BL',
+  'STM.BL', 'COHR.BL', 'FORM.BL', 'ACLS.BL', 'AEIS.BL', 'ONTO.BL', 'UCTT.BL', 'COHU.BL', 'ICHR.BL',
+  'MKSI.BL', 'PLAB.BL', 'CYA.BL', 'AOS.BL', 'INDI.BL', 'VSH.BL', 'SMTC.BL', 'SITM.BL', 'NVMI.BL',
+  'ALGM.BL', 'CEVA.BL', 'MXL.BL', 'GSI.BL', 'POET.BL', 'IGIC.BL', 'RESN.BL', 'ATOM.BL', 'TXN.BL',
+  'SOXX.BL', 'SOXL.BL', 'SOXS.BL', 'SMH.BL', 'USD.BL', 'SSG.BL', 'XSD.BL', 'PSI.BL', 'PTF.BL', 'FTXL.BL'
+]);
 
 let chartInstance = null; 
   
@@ -211,7 +225,11 @@ function render(flashType, flashKey) {
 
   let activeCount = 0, brokenCount = 0; 
   let html = ''; 
+  const filterEnabled = document.getElementById('filter-semicond').checked;
+
   sorted.forEach(s => { 
+    if (filterEnabled && !semicondSet.has(s.symbol)) return;
+
     const isActive = s.status === 'active'; 
     if (isActive) activeCount++; else brokenCount++; 
     
@@ -241,8 +259,12 @@ function render(flashType, flashKey) {
   tbody.innerHTML = html; 
   document.getElementById('active-count').textContent = activeCount; 
   document.getElementById('broken-count').textContent = brokenCount; 
-  document.getElementById('total-count').textContent = sorted.length; 
+  document.getElementById('total-count').textContent = activeCount + brokenCount; 
 } 
+
+document.getElementById('filter-semicond').addEventListener('change', () => {
+  render();
+});
 
 function fmtTime(t) { 
   if (!t) return ''; 
