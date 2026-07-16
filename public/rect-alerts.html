@@ -79,7 +79,7 @@
       <tr> 
         <th>Symbol</th><th>起止时间</th><th>区间</th><th>宽度</th> 
         <th>持续min</th><th>ActBars</th><th>Inlier%</th><th>Cov</th> 
-        <th>Touch H/L</th><th>Vol</th><th>状态</th><th>突破</th><th>检测时间</th> 
+        <th>Touch H/L</th><th>Vol</th><th>状态</th><th>突破</th><th>Bid</th><th>Ask</th><th>价差</th><th>检测时间</th> 
       </tr> 
     </thead> 
     <tbody id="signals-body"></tbody> 
@@ -96,6 +96,22 @@
 
 <script> 
 const signals = new Map(); // key: symbol_rect_start 
+
+let quoteMap = {}; // { symbol: { bid, ask, spread } } 
+ 
+async function fetchQuotes() { 
+  try { 
+    const res = await fetch('/api/screener'); 
+    if (!res.ok) return; 
+    const data = await res.json(); 
+    quoteMap = {}; 
+    data.forEach(r => { 
+      if (r.bid != null || r.ask != null) { 
+        quoteMap[r.symbol] = { bid: r.bid, ask: r.ask, spread: r.spread }; 
+      } 
+    }); 
+  } catch(e) { console.error('[quotes] fetch error:', e); } 
+} 
 
 const semicondSet = new Set([
   'NVDA.BL', 'AMD.BL', 'TSM.BL', 'AVGO.BL', 'INTC.BL', 'QCOM.BL', 'MU.BL', 'AMAT.BL', 'TXN.BL',
@@ -215,6 +231,8 @@ function connectWs() {
   }; 
 } 
 connectWs(); 
+fetchQuotes(); 
+setInterval(fetchQuotes, 10000); // 每10秒刷新 
 
 function render(flashType, flashKey) { 
   const tbody = document.getElementById('signals-body'); 
@@ -240,6 +258,12 @@ function render(flashType, flashKey) {
     const cls = isActive ? 'active' : 'broken'; 
     const flash = (flashKey === key) ? (flashType === 'new' ? ' new-flash' : ' break-flash') : ''; 
     const breakInfo = s.break_direction ? `${s.break_direction.toUpperCase()} @$${Number(s.break_price).toFixed(2)}` : '—'; 
+
+    const q = quoteMap[s.symbol] || {}; 
+    const bid    = q.bid    != null ? Number(q.bid).toFixed(2)    : '—'; 
+    const ask    = q.ask    != null ? Number(q.ask).toFixed(2)    : '—'; 
+    const spread = q.spread != null ? Number(q.spread).toFixed(3) : '—'; 
+
     html += `<tr class="${cls}${flash}"> 
       <td style="cursor:pointer; color:#007acc;" onclick="openChart('${s.symbol}', '${s.rect_start}', '${s.rect_end}', ${Number(s.upper_price)}, ${Number(s.lower_price)})"><b>${s.symbol}</b></td> 
       <td>${fmtTime(s.rect_start)}-${fmtTime(s.rect_end)}</td> 
@@ -253,6 +277,7 @@ function render(flashType, flashKey) {
       <td>${s.total_volume || ''}</td> 
       <td>${isActive ? '🟢' : '🔴'}</td> 
       <td>${breakInfo}</td> 
+      <td>${bid}</td><td>${ask}</td><td>${spread}</td> 
       <td>${fmtTime(s.detected_at)}</td> 
     </tr>`; 
   }); 
