@@ -1351,6 +1351,26 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
+// ═══ 矩形区间信号 API ═══
+app.get('/api/rect-signals', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, symbol, trade_date, rect_start, rect_end, duration_min,
+             upper_price, lower_price, range_width, active_bars,
+             inlier_pct, bar_coverage, high_touches, low_touches, alternations,
+             total_volume, detected_at, updated_at, status,
+             break_direction, break_price, break_time
+      FROM market_data.rect_signals
+      WHERE trade_date = CURRENT_DATE
+      ORDER BY detected_at DESC
+    `);
+    res.json({ count: rows.length, signals: rows });
+  } catch (e) {
+    console.error('[RectSignals] API error:', e.message);
+    res.status(500).json({ error: 'rect_signals_failed' });
+  }
+});
+
 // === 边界预警列表 API ===
 // 前端筛选：price_min/max, vol_min/max, day_range_min/max, avg_range_min/max
 app.get('/api/boundary-alerts', (req, res) => {
@@ -4704,6 +4724,7 @@ app.get('/volume-chart',        (req, res) => res.sendFile(path.join(__dirname, 
 app.get('/screener-breakout',   (req, res) => res.sendFile(path.join(__dirname, '../public/screener-breakout.html')));
 app.get('/screener-range',      (req, res) => res.sendFile(path.join(__dirname, '../public/screener-range.html')));
 app.get('/crossed-market',      (req, res) => res.sendFile(path.join(__dirname, '../public/crossed-market.html')));
+app.get('/rect-alerts',         (req, res) => res.sendFile(path.join(__dirname, '../public/rect-alerts.html')));
 
 // [PERF] ensureTables 默认跳过（仅 ENSURE_TABLES=1 时执行 DDL），不阻塞 startAlertMonitor
 ensureTables().then(() => {
@@ -4712,4 +4733,46 @@ ensureTables().then(() => {
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
-app.listen(PORT, HOST, () => console.log(`Server listening on http://${HOST}:${PORT}`));
+const server = app.listen(PORT, HOST, () => console.log(`Server listening on http://${HOST}:${PORT}`));
+
+// ═══ 矩形区间 WebSocket 推送 ═══
+const { WebSocketServer } = require('ws');
+const wss = new WebSocketServer({ server, path: '/ws/rect-signals' });
+const rectWsClients = new Set();
+
+wss.on('connection', (ws) => {
+  rectWsClients.add(ws);
+  ws.on('close', () => rectWsClients.delete(ws));
+  ws.on('error', () => rectWsClients.delete(ws));
+});
+
+function broadcastRectEvent(message) {
+  const dead = [];
+  for (const ws of rectWsClients) {
+    if (ws.readyState === 1) {
+      ws.send(message);
+    } else {
+      dead.push(ws);
+    }
+  }
+  dead.forEach(ws => rectWsClients.delete(ws));
+}
+
+// ═══ Redis 订阅 rect:events ═══
+const { createClient } = require('redis');
+
+(async () => {
+  try {
+    const redisHost = process.env.REDIS_HOST || '127.0.0.1';
+    const redisPort = process.env.REDIS_PORT || '6379';
+    const redisSub = createClient({ url: `redis://${redisHost}:${redisPort}` });
+    redisSub.on('error', (err) => console.error('[RectRedis] Error:', err.message));
+    await redisSub.connect();
+    await redisSub.subscribe('rect:events', (message) => {
+      broadcastRectEvent(message);
+    });
+    console.log(`[RectRedis] Subscribed to rect:events (${redisHost}:${redisPort})`);
+  } catch (err) {
+    console.error('[RectRedis] Failed to connect:', err.message);
+  }
+})();
