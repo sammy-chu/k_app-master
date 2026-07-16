@@ -105,7 +105,7 @@ function openChart(symbol, rectStart, rectEnd, upper, lower) {
   // 取日期 
   const date = rectStart.slice(0, 10); 
  
-  fetch(`/api/ohlcv?symbol=${symbol}&date=${date}`).then(r => r.json()).then(data => { 
+  fetch(`/api/rect-kline?symbol=${symbol}&date=${date}`).then(r => r.json()).then(data => { 
     if (!data || data.length === 0) return; 
  
     // 清除旧图 

@@ -1375,6 +1375,27 @@ app.get('/api/rect-signals', async (req, res) => {
   }
 });
 
+// 矩形监控专用K线API（从 minute_bars 取）
+app.get('/api/rect-kline', async (req, res) => {
+  const symbol = (req.query.symbol || '').trim();
+  const date = (req.query.date || '').trim();
+  if (!symbol || !date) return res.status(400).json({ error: 'symbol and date required' });
+
+  try {
+    const { rows } = await pool.query(`
+      SELECT bar_time AS t, open AS o, high AS h, low AS l, close AS c, volume AS v
+      FROM market_data.minute_bars
+      WHERE symbol = $1 AND trade_date = $2::date
+        AND volume > 0
+      ORDER BY bar_time ASC
+    `, [symbol, date]);
+    res.json(rows);
+  } catch (e) {
+    console.error('[rect-kline] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // === 边界预警列表 API ===
 // 前端筛选：price_min/max, vol_min/max, day_range_min/max, avg_range_min/max
 app.get('/api/boundary-alerts', (req, res) => {
