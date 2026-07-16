@@ -1,0 +1,194 @@
+<!DOCTYPE html> 
+<html lang="zh-CN"> 
+<head> 
+<meta charset="UTF-8"> 
+<meta name="viewport" content="width=device-width, initial-scale=1.0"> 
+<title>矩形区间监控</title> 
+<style> 
+  * { margin: 0; padding: 0; box-sizing: border-box; } 
+  body { 
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+    background-color: #1a1a1a; color: #ddd; padding: 20px; line-height: 1.6; 
+  } 
+  .container { max-width: 1600px; margin: 0 auto; } 
+  .nav-links { text-align: center; margin-bottom: 20px; } 
+  .nav-links a { 
+    color: #007acc; text-decoration: none; padding: 6px 14px; margin: 0 6px; 
+    border: 1px solid #007acc; border-radius: 4px; font-size: 13px; display: inline-block; 
+  } 
+  .nav-links a:hover, .nav-links a.active { background-color: #007acc; color: white; } 
+  .header-bar { 
+    display: flex; justify-content: space-between; align-items: center; 
+    margin-bottom: 16px; border-bottom: 1px solid #333; padding-bottom: 12px; 
+  } 
+  .title { font-size: 1.4em; color: #ddd; } 
+  .stats { font-size: 13px; color: #888; } 
+  .stats .active-count { color: #26a69a; font-weight: bold; } 
+  .stats .broken-count { color: #ef5350; font-weight: bold; } 
+  table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: monospace; } 
+  th, td { border: 1px solid #333; padding: 5px 8px; text-align: left; white-space: nowrap; } 
+  th { background: #16213e; position: sticky; top: 0; } 
+  tr.active td:first-child { border-left: 3px solid #26a69a; } 
+  tr.broken td { color: #888; text-decoration: line-through; } 
+  tr.broken td:first-child { border-left: 3px solid #ef5350; } 
+  tr.new-flash { animation: flash-green 1s; } 
+  tr.break-flash { animation: flash-red 1s; } 
+  @keyframes flash-green { 0%,100% { background: transparent; } 50% { background: #1b5e20; } } 
+  @keyframes flash-red { 0%,100% { background: transparent; } 50% { background: #b71c1c; } } 
+  .notify { 
+    position: fixed; top: 10px; right: 10px; padding: 10px 20px; 
+    border-radius: 5px; font-weight: bold; display: none; z-index: 999; 
+    font-size: 13px; 
+  } 
+  .notify.new { background: #26a69a; color: #000; } 
+  .notify.break { background: #ef5350; color: #fff; } 
+  .ws-status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #555; margin-right: 6px; } 
+  .ws-status.connected { background: #26a69a; } 
+  .ws-status.disconnected { background: #ef5350; } 
+</style> 
+</head> 
+<body> 
+<div class="container"> 
+  <div class="nav-links"> 
+    <a href="/">排行榜</a> 
+    <a href="/boundary-alerts">边界预警</a> 
+    <a href="/screener-breakout">突破选股</a> 
+    <a href="/screener-range">区间选股</a> 
+    <a href="/rect-alerts" class="active">矩形监控</a> 
+    <a href="/active-trading">活跃成交</a> 
+  </div> 
+
+  <div class="header-bar"> 
+    <span class="title">📐 矩形区间实时监控</span> 
+    <span class="stats"> 
+      <span class="ws-status" id="ws-dot"></span> 
+      Active: <span class="active-count" id="active-count">0</span> | 
+      Broken: <span class="broken-count" id="broken-count">0</span> | 
+      Total: <span id="total-count">0</span> 
+    </span> 
+  </div> 
+
+  <div id="notify" class="notify"></div> 
+
+  <table> 
+    <thead> 
+      <tr> 
+        <th>Symbol</th><th>起止时间</th><th>区间</th><th>宽度</th> 
+        <th>持续min</th><th>ActBars</th><th>Inlier%</th><th>Cov</th> 
+        <th>Touch H/L</th><th>Vol</th><th>状态</th><th>突破</th><th>检测时间</th> 
+      </tr> 
+    </thead> 
+    <tbody id="signals-body"></tbody> 
+  </table> 
+</div> 
+
+<script> 
+const signals = new Map(); // key: symbol_rect_start 
+
+// 初始化 
+fetch('/api/rect-signals').then(r => r.json()).then(data => { 
+  (data.signals || []).forEach(s => { 
+    const key = s.symbol + '_' + s.rect_start; 
+    signals.set(key, s); 
+  }); 
+  render(); 
+}); 
+
+// WebSocket 
+let ws; 
+function connectWs() { 
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'; 
+  ws = new WebSocket(`${proto}//${location.host}/ws/rect-signals`); 
+  ws.onopen = () => { document.getElementById('ws-dot').className = 'ws-status connected'; }; 
+  ws.onclose = () => { 
+    document.getElementById('ws-dot').className = 'ws-status disconnected'; 
+    setTimeout(connectWs, 3000); 
+  }; 
+  ws.onerror = () => ws.close(); 
+  ws.onmessage = (e) => { 
+    const msg = JSON.parse(e.data); 
+    if (msg.type === 'new') { 
+      const key = msg.symbol + '_' + msg.start_time; 
+      signals.set(key, { 
+        symbol: msg.symbol, rect_start: msg.start_time, rect_end: msg.end_time, 
+        upper_price: msg.upper, lower_price: msg.lower, range_width: msg.range_width, 
+        duration_min: msg.duration_min, active_bars: msg.active_bar_count, 
+        inlier_pct: msg.inlier_pct, bar_coverage: msg.bar_coverage, 
+        high_touches: msg.high_touches, low_touches: msg.low_touches, 
+        total_volume: msg.total_volume, status: 'active', 
+        detected_at: msg.timestamp 
+      }); 
+      showNotify(`🟢 ${msg.symbol} ${fmtTime(msg.start_time)}`, 'new'); 
+      render('new', key); 
+    } else if (msg.type === 'break') { 
+      for (const [key, s] of signals) { 
+        if (s.symbol === msg.symbol && s.status === 'active') { 
+          s.status = 'broken'; 
+          s.break_direction = msg.direction; 
+          s.break_price = msg.break_price; 
+          s.break_time = msg.break_time; 
+          showNotify(`⚠️ ${msg.symbol} BREAK ${msg.direction.toUpperCase()} @$${msg.break_price}`, 'break'); 
+          render('break', key); 
+          break; 
+        } 
+      } 
+    } 
+  }; 
+} 
+connectWs(); 
+
+function render(flashType, flashKey) { 
+  const tbody = document.getElementById('signals-body'); 
+  const sorted = [...signals.values()].sort((a, b) => { 
+    if (a.status !== b.status) return a.status === 'active' ? -1 : 1; 
+    return (b.detected_at || '').localeCompare(a.detected_at || ''); 
+  }); 
+
+  let activeCount = 0, brokenCount = 0; 
+  let html = ''; 
+  sorted.forEach(s => { 
+    const isActive = s.status === 'active'; 
+    if (isActive) activeCount++; else brokenCount++; 
+    const key = s.symbol + '_' + s.rect_start; 
+    const cls = isActive ? 'active' : 'broken'; 
+    const flash = (flashKey === key) ? (flashType === 'new' ? ' new-flash' : ' break-flash') : ''; 
+    const breakInfo = s.break_direction ? `${s.break_direction.toUpperCase()} @$${Number(s.break_price).toFixed(2)}` : '—'; 
+    html += `<tr class="${cls}${flash}"> 
+      <td><b>${s.symbol}</b></td> 
+      <td>${fmtTime(s.rect_start)}-${fmtTime(s.rect_end)}</td> 
+      <td>$${Number(s.lower_price).toFixed(2)}-$${Number(s.upper_price).toFixed(2)}</td> 
+      <td>$${Number(s.range_width).toFixed(2)}</td> 
+      <td>${s.duration_min || ''}</td> 
+      <td>${s.active_bars || ''}</td> 
+      <td>${s.inlier_pct ? (Number(s.inlier_pct)*100).toFixed(0)+'%' : ''}</td> 
+      <td>${s.bar_coverage ? Number(s.bar_coverage).toFixed(2) : ''}</td> 
+      <td>${s.high_touches || ''}/${s.low_touches || ''}</td> 
+      <td>${s.total_volume || ''}</td> 
+      <td>${isActive ? '🟢' : '🔴'}</td> 
+      <td>${breakInfo}</td> 
+      <td>${fmtTime(s.detected_at)}</td> 
+    </tr>`; 
+  }); 
+  tbody.innerHTML = html; 
+  document.getElementById('active-count').textContent = activeCount; 
+  document.getElementById('broken-count').textContent = brokenCount; 
+  document.getElementById('total-count').textContent = sorted.length; 
+} 
+
+function fmtTime(t) { 
+  if (!t) return ''; 
+  if (t.length >= 16) return t.slice(11, 16); 
+  if (t.length === 5) return t; 
+  return t; 
+} 
+
+function showNotify(text, type) { 
+  const el = document.getElementById('notify'); 
+  el.textContent = text; 
+  el.className = 'notify ' + type; 
+  el.style.display = 'block'; 
+  setTimeout(() => el.style.display = 'none', 4000); 
+} 
+</script> 
+</body> 
+</html>
