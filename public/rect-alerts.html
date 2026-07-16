@@ -214,6 +214,10 @@ function render(flashType, flashKey) {
   sorted.forEach(s => { 
     const isActive = s.status === 'active'; 
     if (isActive) activeCount++; else brokenCount++; 
+    
+    // 不显示失效股票
+    if (!isActive) return;
+
     const key = s.symbol + '_' + s.rect_start; 
     const cls = isActive ? 'active' : 'broken'; 
     const flash = (flashKey === key) ? (flashType === 'new' ? ' new-flash' : ' break-flash') : ''; 
