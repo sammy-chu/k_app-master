@@ -1355,11 +1355,15 @@ app.get('/health', (req, res) => {
 app.get('/api/rect-signals', async (req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT id, symbol, trade_date, rect_start, rect_end, duration_min,
-             upper_price, lower_price, range_width, active_bars,
+      SELECT id, symbol, trade_date,
+             TO_CHAR(rect_start, 'YYYY-MM-DD HH24:MI:SS') AS rect_start,
+             TO_CHAR(rect_end, 'YYYY-MM-DD HH24:MI:SS') AS rect_end,
+             duration_min, upper_price, lower_price, range_width, active_bars,
              inlier_pct, bar_coverage, high_touches, low_touches, alternations,
-             total_volume, detected_at, updated_at, status,
-             break_direction, break_price, break_time
+             total_volume,
+             TO_CHAR(detected_at, 'YYYY-MM-DD HH24:MI:SS') AS detected_at,
+             updated_at, status, break_direction, break_price,
+             TO_CHAR(break_time, 'YYYY-MM-DD HH24:MI:SS') AS break_time
       FROM market_data.rect_signals
       WHERE trade_date = CURRENT_DATE
       ORDER BY detected_at DESC
