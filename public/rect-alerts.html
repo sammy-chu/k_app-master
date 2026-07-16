@@ -4,6 +4,7 @@
 <meta charset="UTF-8"> 
 <meta name="viewport" content="width=device-width, initial-scale=1.0"> 
 <title>矩形区间监控</title> 
+<script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <style> 
   * { margin: 0; padding: 0; box-sizing: border-box; } 
   body { 
@@ -80,10 +81,74 @@
     </thead> 
     <tbody id="signals-body"></tbody> 
   </table> 
+
+  <div id="chart-panel" style="display:none; margin-top:20px; border:1px solid #333; border-radius:6px; padding:10px;"> 
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;"> 
+      <span id="chart-title" style="font-size:14px; color:#ddd;"></span> 
+      <span style="cursor:pointer; color:#888; font-size:18px;" onclick="closeChart()">✕</span> 
+    </div> 
+    <div id="chart-container" style="height:300px;"></div> 
+  </div> 
 </div> 
 
 <script> 
 const signals = new Map(); // key: symbol_rect_start 
+
+let chartInstance = null; 
+  
+function openChart(symbol, rectStart, rectEnd, upper, lower) { 
+  const panel = document.getElementById('chart-panel'); 
+  const container = document.getElementById('chart-container'); 
+  panel.style.display = 'block'; 
+  document.getElementById('chart-title').textContent = `${symbol} K线图`; 
+ 
+  // 取日期 
+  const date = rectStart.slice(0, 10); 
+ 
+  fetch(`/api/ohlcv?symbol=${symbol}&date=${date}`).then(r => r.json()).then(data => { 
+    if (!data || data.length === 0) return; 
+ 
+    // 清除旧图 
+    container.innerHTML = ''; 
+ 
+    const chart = LightweightCharts.createChart(container, { 
+      width: container.clientWidth, 
+      height: 300, 
+      layout: { background: { color: '#1a1a1a' }, textColor: '#ddd' }, 
+      grid: { vertLines: { color: '#2a2a2a' }, horzLines: { color: '#2a2a2a' } }, 
+      timeScale: { timeVisible: true, secondsVisible: false }, 
+    }); 
+ 
+    const candleSeries = chart.addCandlestickSeries({ 
+      upColor: '#26a69a', downColor: '#ef5350', 
+      borderUpColor: '#26a69a', borderDownColor: '#ef5350', 
+      wickUpColor: '#26a69a', wickDownColor: '#ef5350', 
+    }); 
+ 
+    const bars = data.map(d => ({ 
+      time: new Date(d.t).getTime() / 1000, 
+      open: Number(d.o), high: Number(d.h), low: Number(d.l), close: Number(d.c), 
+    })).filter(b => b.open > 0); 
+ 
+    candleSeries.setData(bars); 
+ 
+    // 画矩形上下沿水平线 
+    const upperLine = chart.addLineSeries({ color: 'red', lineWidth: 1, lineStyle: 2, priceLineVisible: false }); 
+    const lowerLine = chart.addLineSeries({ color: 'blue', lineWidth: 1, lineStyle: 2, priceLineVisible: false }); 
+    const firstTime = bars[0].time; 
+    const lastTime = bars[bars.length - 1].time; 
+    upperLine.setData([{ time: firstTime, value: upper }, { time: lastTime, value: upper }]); 
+    lowerLine.setData([{ time: firstTime, value: lower }, { time: lastTime, value: lower }]); 
+ 
+    chart.timeScale().fitContent(); 
+    chartInstance = chart; 
+  }); 
+} 
+ 
+function closeChart() { 
+  document.getElementById('chart-panel').style.display = 'none'; 
+  if (chartInstance) { chartInstance.remove(); chartInstance = null; } 
+} 
 
 // 初始化 
 fetch('/api/rect-signals').then(r => r.json()).then(data => { 
@@ -154,7 +219,7 @@ function render(flashType, flashKey) {
     const flash = (flashKey === key) ? (flashType === 'new' ? ' new-flash' : ' break-flash') : ''; 
     const breakInfo = s.break_direction ? `${s.break_direction.toUpperCase()} @$${Number(s.break_price).toFixed(2)}` : '—'; 
     html += `<tr class="${cls}${flash}"> 
-      <td><b>${s.symbol}</b></td> 
+      <td style="cursor:pointer; color:#007acc;" onclick="openChart('${s.symbol}', '${s.rect_start}', '${s.rect_end}', ${Number(s.upper_price)}, ${Number(s.lower_price)})"><b>${s.symbol}</b></td> 
       <td>${fmtTime(s.rect_start)}-${fmtTime(s.rect_end)}</td> 
       <td>$${Number(s.lower_price).toFixed(2)}-$${Number(s.upper_price).toFixed(2)}</td> 
       <td>$${Number(s.range_width).toFixed(2)}</td> 
