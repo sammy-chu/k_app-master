@@ -89,7 +89,9 @@
   document.addEventListener('click', function (e) {
     const cell = e.target.closest && e.target.closest('.symbol');
     if (!cell) return;
-    const symbol = (cell.dataset.symbol || cell.textContent || '').trim().toUpperCase();
+    const raw = (cell.dataset.symbol || cell.textContent || '').trim().toUpperCase();
+    // ── 剥掉 .BL 后缀：ExchangeSearch=b 已指定 BL 市场，symbol 字段不应带后缀 ── 
+    const symbol = raw.replace(/\.BL$/, '');
     if (!SYMBOL_RE.test(symbol)) return;
     e.preventDefault();
     openStock(symbol);
