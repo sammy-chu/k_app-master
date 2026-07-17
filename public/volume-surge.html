@@ -393,7 +393,7 @@
       const noPrice = !r.has_market_data;
 
       tr.innerHTML = `
-        <td class="sym">${r.symbol}</td>
+        <td class="sym symbol">${r.symbol}</td>
         <td><span class="ratio-badge ${ratioClass(r.ratio)}">${ratioStr}</span></td>
         <td class="hot">${fmtInt(r.recent_volume)}</td>
         <td class="dim">${fmtInt(r.baseline_volume)}</td>
@@ -486,5 +486,6 @@
       window.addEventListener('whitelist-changed', update);
     })();
   </script>
+    <script src="/js/open-stock.js" defer></script>
 </body>
 </html>

@@ -265,7 +265,7 @@ function render(flashType, flashKey) {
     const spread = q.spread != null ? Number(q.spread).toFixed(3) : '—'; 
 
     html += `<tr class="${cls}${flash}"> 
-      <td style="cursor:pointer; color:#007acc;" onclick="openChart('${s.symbol}', '${s.rect_start}', '${s.rect_end}', ${Number(s.upper_price)}, ${Number(s.lower_price)})"><b>${s.symbol}</b></td> 
+      <td style="cursor:pointer; color:#007acc;" onclick="openChart('${s.symbol}', '${s.rect_start}', '${s.rect_end}', ${Number(s.upper_price)}, ${Number(s.lower_price)})"><b class="symbol">${s.symbol}</b></td> 
       <td>${fmtTime(s.rect_start)}-${fmtTime(s.rect_end)}</td> 
       <td>$${Number(s.lower_price).toFixed(2)}-$${Number(s.upper_price).toFixed(2)}</td> 
       <td>$${Number(s.range_width).toFixed(2)}</td> 
@@ -306,5 +306,6 @@ function showNotify(text, type) {
   setTimeout(() => el.style.display = 'none', 4000); 
 } 
 </script> 
+    <script src="/js/open-stock.js" defer></script>
 </body> 
 </html>

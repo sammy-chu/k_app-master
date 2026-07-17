@@ -779,7 +779,7 @@ function buildRowHTML(r) {
   }
 
   return `<tr data-sym="${r.symbol}" class="${rowClass.trim()}">
-    <td><div class="symbol-cell"><span class="sym">${r.symbol}</span><button class="btn-block-inline" onclick="blockStock('${r.symbol}')" title="屏蔽此股票">×</button>${icebergBadge}${graceBadge}</div></td>
+    <td><div class="symbol-cell"><span class="sym symbol">${r.symbol}</span><button class="btn-block-inline" onclick="blockStock('${r.symbol}')" title="屏蔽此股票">×</button>${icebergBadge}${graceBadge}</div></td>
     <td class="${pcls}">${fmt(r.last_price, 2)}</td>
     <td class="${pcls}">${sign}${pct.toFixed(2)}%</td>
     <td><div class="vol-cell">${fmtVol(vol)}<div class="mini-bar"><div class="mini-bar-fill" style="width:${vPct.toFixed(1)}%"></div></div></div></td>
@@ -990,5 +990,6 @@ fetchData();
     window.addEventListener('whitelist-changed', update);
   })();
 </script>
+    <script src="/js/open-stock.js" defer></script>
 </body>
 </html>

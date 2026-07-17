@@ -785,7 +785,7 @@
 
         html += `
           <tr data-sym="${item.symbol}">
-            <td><div class="symbol-cell"><span class="sym">${item.symbol}</span><button class="btn-block-inline" onclick="blockStock('${item.symbol}')" title="屏蔽此股票">×</button></div></td>
+            <td><div class="symbol-cell"><span class="sym symbol">${item.symbol}</span><button class="btn-block-inline" onclick="blockStock('${item.symbol}')" title="屏蔽此股票">×</button></div></td>
             <td>${formatTime(sig.bar_time)}</td>
             <td class="${scoreClass}">${sig.score}</td>
             <td style="color:#26a69a;">${ind.close ? ind.close.toFixed(2) : '-'}</td>
@@ -852,5 +852,6 @@
     window.addEventListener('whitelist-changed', update);
   })();
 </script>
+    <script src="/js/open-stock.js" defer></script>
 </body>
 </html>

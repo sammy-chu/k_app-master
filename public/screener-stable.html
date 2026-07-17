@@ -977,7 +977,7 @@ function buildRowHTML(r) {
   const rVal = (v, format) => v != null ? format(v) : '—';
 
   return `
-    <td><div class="symbol-cell"><span class="sym" onclick="lookupAndShow('${r.symbol}')">${r.symbol}</span><button class="btn-block-inline" onclick="blockStock('${r.symbol}')" title="屏蔽此股票">×</button>${graceBadge}</div></td>
+    <td><div class="symbol-cell"><span class="sym symbol" onclick="lookupAndShow('${r.symbol}')">${r.symbol}</span><button class="btn-block-inline" onclick="blockStock('${r.symbol}')" title="屏蔽此股票">×</button>${graceBadge}</div></td>
     <td class="${pcls}">${fmt(r.last_price,2)}</td>
     <td class="${pcls}">${sign}${pct.toFixed(2)}%</td>
     <td class="${pcls}">${sign}${fmt(r.change_amount,3)}</td>
@@ -1438,5 +1438,6 @@ run();
     window.addEventListener('whitelist-changed', update);
   })();
 </script>
+    <script src="/js/open-stock.js" defer></script>
 </body>
 </html>

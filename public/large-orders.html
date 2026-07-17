@@ -418,7 +418,7 @@
                     parentTr.innerHTML = `
                         <td style="font-weight:bold;">
                             <span class="toggle-icon" id="toggle-icon-${sym}">${icon}</span> 
-                            <span class="sym-text ${symbolHotClass}">${sym}</span>
+                            <span class="sym-text symbol ${symbolHotClass}">${sym}</span>
                         </td>
                         <td class="td-price">${group.current_price.toFixed(2)}</td>
                         <td class="td-vol">${group.total_volume}</td>
@@ -517,5 +517,6 @@
     window.addEventListener('whitelist-changed', update);
   })();
 </script>
+    <script src="/js/open-stock.js" defer></script>
 </body>
 </html>

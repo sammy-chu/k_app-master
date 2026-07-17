@@ -365,7 +365,7 @@
                 
                 return `
                     <li class="alert-item">
-                        <span class="alert-symbol">${alert.symbol}</span>
+                        <span class="alert-symbol symbol">${alert.symbol}</span>
                         <span class="alert-time">${time}</span>
                         <span class="alert-amplitude ${amplitudeClass}">${amplitudeText}</span>
                         <span class="alert-direction">${direction}</span>
@@ -622,5 +622,6 @@
     window.addEventListener('whitelist-changed', update);
   })();
 </script>
+    <script src="/js/open-stock.js" defer></script>
 </body>
 </html>

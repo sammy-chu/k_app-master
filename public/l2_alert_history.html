@@ -1070,7 +1070,7 @@
 
         return `<tr class="${rowCls.trim()}" data-code="${row.stock_code}">
             <td>${i}</td>
-            <td><div class="symbol-cell"><span class="symbol">${mark}${row.stock_code}</span><button class="btn-block-inline" onclick="blockStock('${row.stock_code}');renderBlockList()" title="屏蔽此股票">×</button></div></td>
+            <td><div class="symbol-cell"><span class="symbol" data-symbol="${row.stock_code}">${mark}${row.stock_code}</span><button class="btn-block-inline" onclick="blockStock('${row.stock_code}');renderBlockList()" title="屏蔽此股票">×</button></div></td>
             <td>${fmtVol(row.volume, row.alert_type)}</td>
             <td><span class="level-badge">${depthStr}</span></td>
             <td>${fmtPrice(row.price)}</td>
@@ -1252,5 +1252,6 @@
     window.addEventListener('whitelist-changed', update);
   })();
 </script>
+    <script src="/js/open-stock.js" defer></script>
 </body>
 </html>
