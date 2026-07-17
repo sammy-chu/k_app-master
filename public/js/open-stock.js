@@ -49,7 +49,9 @@
   async function openStock(symbol) {
     if (IN_FLIGHT.has(symbol)) return;
     IN_FLIGHT.add(symbol);
-    const pending = toast(`发送中 ${symbol}...`, 'ok', /*sticky*/ true);
+    
+    // 乐观模式：直接显示绿 toast，不用等 PPro8
+    toast(`已开 ${symbol}`, 'ok');
 
     try {
       const res = await fetch(BRIDGE, {
@@ -58,28 +60,23 @@
         body: JSON.stringify({ symbol, exchange: 'b' }),
       });
       const body = await res.json().catch(() => ({}));
-      pending.remove();
 
-      if (res.ok && body.ok) {
-        toast(`已开 ${symbol}${body.title ? ` — ${body.title}` : ''}`, 'ok');
-        return;
+      // 如果后端报错，追加红 toast 提示（覆盖乐观结果）
+      if (!res.ok || !body.ok) {
+        if (res.status === 400) {
+          toast(`参数错误：${body.error || 'invalid'}`, 'err');
+        } else if (res.status === 504) {
+          toast(`超时：PPro8 无响应`, 'err');
+        } else if (res.status === 502) {
+          toast(body.hint || `失败 (exit ${body.exit_code || '?'})`, 'err');
+          console.warn('[open-stock] ps1 log:', body.log);
+        } else if (res.status === 0 || !res.status) {
+           toast('桥接未启动，请以管理员身份运行 start-bridge.bat', 'warn');
+        } else {
+          toast(`失败 (${res.status})`, 'err');
+        }
       }
-      if (res.status === 400) {
-        toast(`参数错误：${body.error || 'invalid'}`, 'err');
-        return;
-      }
-      if (res.status === 504) {
-        toast(`超时：PPro8 无响应`, 'err');
-        return;
-      }
-      if (res.status === 502) {
-        toast(body.hint || `失败 (exit ${body.exit_code || '?'})`, 'err');
-        console.warn('[open-stock] ps1 log:', body.log);
-        return;
-      }
-      toast(`失败 (${res.status})`, 'err');
     } catch (e) {
-      pending.remove();
       toast('桥接未启动，请以管理员身份运行 start-bridge.bat', 'warn');
     } finally {
       IN_FLIGHT.delete(symbol);
