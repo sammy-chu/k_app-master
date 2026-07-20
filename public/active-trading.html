@@ -295,6 +295,51 @@
     .header-bar { flex-direction: column; align-items: flex-start; gap: 8px; }
     #block-modal { width: 90vw; }
   }
+
+  /* ── 跨股冰山联动区块 ── */ 
+  #cross-iceberg-section { 
+    margin-bottom: 16px; display: none; 
+  } 
+  #cross-iceberg-section.visible { display: block; } 
+  .cross-ice-header { 
+    font-size: 13px; color: #ce93d8; margin-bottom: 8px; 
+    display: flex; align-items: center; gap: 8px; 
+  } 
+  .cross-ice-header .dot { 
+    width: 8px; height: 8px; border-radius: 50%; 
+    background: #ab47bc; box-shadow: 0 0 6px #ab47bc; 
+  } 
+  .cross-ice-table { 
+    width: 100%; border-collapse: collapse; 
+    background: #252525; border-radius: 8px; overflow: hidden; font-size: 13px; 
+  } 
+  .cross-ice-table th { 
+    background: #2e2e2e; color: #ce93d8; font-weight: 600; 
+    padding: 8px 12px; text-align: left; font-size: 12px; 
+  } 
+  .cross-ice-table td { 
+    padding: 8px 12px; border-bottom: 1px solid #2e2e2e; color: #ddd; 
+  } 
+  .cross-ice-table tr { 
+    border-left: 3px solid #ab47bc; 
+  } 
+  .cross-ice-table tr:hover td { background: #2a2a2a; } 
+  .cross-ice-core { 
+    font-weight: bold; color: #ce93d8; font-size: 14px; 
+  } 
+  .cross-ice-pair { 
+    font-size: 12px; color: #bbb; margin-left: 4px; 
+  } 
+  .cross-ice-pair .partner { color: #e1bee7; font-weight: 600; } 
+  .cross-ice-pair .detail { color: #888; } 
+
+  @keyframes cross-ice-flash { 
+    0%, 100% { background-color: rgba(171, 71, 188, 0.08); } 
+    50% { background-color: rgba(171, 71, 188, 0.28); } 
+  } 
+  .cross-ice-table tr.cross-flash td { 
+    animation: cross-ice-flash 1s infinite; 
+  } 
 </style>
 </head>
 <body>
@@ -396,6 +441,24 @@
     </div>
     <span id="count-info">—</span>
   </div>
+
+  <!-- 跨股冰山联动 --> 
+  <div id="cross-iceberg-section"> 
+    <div class="cross-ice-header"> 
+      <span class="dot"></span> 
+      <span>跨股冰山联动</span> 
+    </div> 
+    <table class="cross-ice-table"> 
+      <thead> 
+        <tr> 
+          <th>核心股票</th> 
+          <th>联动配对</th> 
+          <th>首次检测</th> 
+        </tr> 
+      </thead> 
+      <tbody id="cross-ice-tbody"></tbody> 
+    </table> 
+  </div> 
 
   <!-- 主表格 -->
   <table>
@@ -529,6 +592,78 @@ let trackedMap = new Map(); // symbol -> 行数据（跨多次拉取持久化，
 // 因为后端 active_trading_symbols 表的语义是"当前全量活跃股票"——一旦按这些条件筛选，
 // 前端宽限期保留逻辑（mergeFreshData）就无法分辨"真的掉出活跃列表"和"仅仅不满足筛选范围"，
 // 会把被筛掉的股票误判为已掉线，导致筛选条件被宽限期机制绕过、看起来"时好时坏"。
+// ── 跨股冰山联动：归并 + 渲染 ────────────────────────────────────────── 
+function mergeCrossIceberg(rows) { 
+  if (!rows || rows.length === 0) return []; 
+
+  // 统计每只股票出现次数 
+  const freq = {}; 
+  for (const r of rows) { 
+    const syms = r.symbol_group.split(','); 
+    for (const s of syms) freq[s] = (freq[s] || 0) + 1; 
+  } 
+
+  // 归并：确定核心股票 
+  const groups = {}; // core -> [{partner, size, seconds, times, updated_at, detected_at}] 
+  for (const r of rows) { 
+    const syms = r.symbol_group.split(','); 
+    // 核心 = 出现次数多的；相同则字母序靠前 
+    const sorted = [...syms].sort((a, b) => { 
+      const diff = (freq[b] || 0) - (freq[a] || 0); 
+      if (diff !== 0) return diff; 
+      return a.localeCompare(b); 
+    }); 
+    const core = sorted[0]; 
+    const partner = sorted.length > 1 ? sorted[1] : ''; 
+    if (!groups[core]) groups[core] = { pairs: [], detected_at: r.detected_at, updated_at: r.updated_at }; 
+    groups[core].pairs.push({ 
+      partner, 
+      size: r.trade_size, 
+      seconds: r.match_count, 
+      times: r.matched_times, 
+      updated_at: r.updated_at, 
+    }); 
+    // 取最早的 detected_at 
+    if (r.detected_at < groups[core].detected_at) groups[core].detected_at = r.detected_at; 
+    // 取最新的 updated_at 
+    if (r.updated_at > groups[core].updated_at) groups[core].updated_at = r.updated_at; 
+  } 
+
+  // 转为数组，按配对数量降序 
+  return Object.entries(groups) 
+    .map(([core, g]) => ({ core, ...g })) 
+    .sort((a, b) => b.pairs.length - a.pairs.length); 
+} 
+
+function renderCrossIceberg(grouped) { 
+  const section = document.getElementById('cross-iceberg-section'); 
+  const tbody = document.getElementById('cross-ice-tbody'); 
+  if (!grouped || grouped.length === 0) { 
+    section.classList.remove('visible'); 
+    return; 
+  } 
+  section.classList.add('visible'); 
+
+  const now = Date.now(); 
+  let html = ''; 
+  for (const g of grouped) { 
+    const updMs = new Date(g.updated_at).getTime(); 
+    const flash = (now - updMs) < 5000 ? ' cross-flash' : ''; 
+    const pairsHtml = g.pairs.map(p => 
+      `<span class="cross-ice-pair"><span class="partner">${p.partner}</span><span class="detail">(${p.size}×${p.seconds}s)</span></span>` 
+    ).join(', '); 
+    const detectedTime = g.detected_at 
+      ? new Date(g.detected_at).toLocaleTimeString('zh-CN', { hour12: false }) 
+      : '-'; 
+    html += `<tr class="${flash}"> 
+      <td><span class="cross-ice-core">${g.core}</span></td> 
+      <td>${pairsHtml}</td> 
+      <td>${detectedTime}</td> 
+    </tr>`; 
+  } 
+  tbody.innerHTML = html; 
+} 
+
 let isFetching = false;
 async function fetchData() {
   if (isFetching) return;
@@ -545,6 +680,10 @@ async function fetchData() {
 
     if (dot) dot.className = 'status-dot live';
     if (stxt) stxt.innerHTML = `<span class="status-dot live"></span>实时 · ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;
+
+    // 跨股冰山联动 
+    const crossGrouped = mergeCrossIceberg(json.cross_iceberg || []); 
+    renderCrossIceberg(crossGrouped); 
 
     applyFilter();
   } catch(e) {
