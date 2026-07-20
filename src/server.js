@@ -1708,7 +1708,22 @@ app.get('/api/active-trading', async (req, res) => {
     // 默认按成交次数降序排（最活跃的在最前）
     results.sort((a, b) => b.trade_count - a.trade_count);
 
-    res.json({ count: results.length, symbols: results });
+    // ── 在现有 symbols 查询之后、res.json 之前，增加 ── 
+    const crossRes = await pool.query(` 
+      SELECT symbol_group, trade_size, match_count, matched_times, detected_at, updated_at 
+      FROM market_data.cross_iceberg_symbols 
+      ORDER BY updated_at DESC 
+    `); 
+    const crossIceberg = crossRes.rows.map(r => ({ 
+      symbol_group: r.symbol_group, 
+      trade_size: Number(r.trade_size), 
+      match_count: Number(r.match_count), 
+      matched_times: r.matched_times || [], 
+      detected_at: r.detected_at, 
+      updated_at: r.updated_at, 
+    })); 
+
+    res.json({ count: results.length, symbols: results, cross_iceberg: crossIceberg });
   } catch (e) {
     console.error('[ActiveTrading] API error:', e.message);
     res.status(500).json({ error: 'active_trading_failed' });
