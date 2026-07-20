@@ -596,6 +596,10 @@ let trackedMap = new Map(); // symbol -> 行数据（跨多次拉取持久化，
 function mergeCrossIceberg(rows) { 
   if (!rows || rows.length === 0) return []; 
 
+  // 过滤：只保留 trade_size * match_count >= 10 的配对 
+  rows = rows.filter(r => r.trade_size * r.match_count >= 10); 
+  if (rows.length === 0) return []; 
+
   // 统计每只股票出现次数 
   const freq = {}; 
   for (const r of rows) { 
