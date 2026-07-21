@@ -2329,6 +2329,10 @@ app.get('/api/alerts', async (req, res) => {
 let rankingCache = [];
 let rankingCacheTime = null;
 
+// === TR Ranking 缓存 ===
+let rankingCacheTr = [];
+let rankingCacheTimeTr = null;
+
 // === 当前时段10日均量缓存 ===
 // daily_intraday_vol.period_vol 存的是当天截至该分钟的累计量
 // 所以取截至当前时刻的最后一条（MAX(period_vol)）即为同期累计量，再对10日求均值
@@ -2586,6 +2590,73 @@ async function refreshRankingCache() {
   }
 }
 
+// === TR Ranking Cache 刷新 ===
+async function refreshRankingCacheTr() {
+  const client = await pool.connect();
+  try {
+    await client.query('SET statement_timeout = 20000');
+    const sql = `
+      SELECT
+        os.symbol,
+        os.open_price                             AS open_price,
+        os.last_price                             AS os_last_price,
+        lp.price                                  AS lp_last_price,
+        os.high_price                             AS high_price,
+        os.low_price                              AS low_price,
+        os.volume                                 AS total_volume
+      FROM market_data.ohlc_snapshot_tr os
+      LEFT JOIN market_data.last_price_tr lp
+             ON lp.symbol = os.symbol
+      WHERE os.trade_date = current_date
+        AND os.open_price > 0
+    `;
+    const { rows } = await client.query(sql);
+
+    const newCache = rows.map(row => {
+      const lpPrice   = Number(row.lp_last_price) || 0;
+      const osPrice   = Number(row.os_last_price) || 0;
+      const openPrice = Number(row.open_price);
+
+      let lastPrice;
+      if (lpPrice > 0) {
+        lastPrice = lpPrice;
+      } else if (osPrice > 0) {
+        lastPrice = osPrice;
+      } else {
+        lastPrice = openPrice;
+      }
+
+      const changeAmt = lastPrice - openPrice;
+      return {
+        symbol:        row.symbol,
+        open_price:    openPrice,
+        last_price:    lastPrice,
+        change_amount: changeAmt,
+        change_pct:    openPrice > 0 ? Number((changeAmt / openPrice * 100).toFixed(2)) : 0,
+        total_volume:  row.total_volume,
+        avg_vol_10d:   0,
+        high_price:    Number(row.high_price || 0),
+        low_price:     Number(row.low_price  || 0),
+      };
+    });
+
+    newCache.sort((a, b) => b.change_amount - a.change_amount);
+    rankingCacheTr = newCache;
+    rankingCacheTimeTr = new Date();
+
+    if (rows.length === 0) {
+      console.log(`[RankingCacheTr] 0 rows. TR market data empty for today.`);
+    } else {
+      console.log(`[RankingCacheTr] Refreshed, ${rankingCacheTr.length} rows`);
+    }
+  } catch (err) {
+    console.error('[RankingCacheTr] Error:', err.message);
+  } finally {
+    await client.query('SET statement_timeout = 0').catch(e => console.error(e));
+    client.release();
+  }
+}
+
 // 排行榜 API
 app.get('/api/ranking', (req, res) => {
   try {
@@ -2634,6 +2705,30 @@ app.get('/api/ranking', (req, res) => {
   } catch (e) {
     console.error('ranking query failed:', e);
     res.status(500).json({ error: 'ranking query failed' });
+  }
+});
+
+// TR 排行榜 API
+app.get('/api/ranking-tr', (req, res) => {
+  try {
+    const minVolume = Number(req.query.min_volume || 0);
+
+    const result = rankingCacheTr
+      .filter(row => Number(row.total_volume) >= minVolume)
+      .map(row => {
+        // TR 暂无 priceWindow 的 3m/30m 缓存计算，仅返回基础数据
+        return {
+          ...row,
+          price_change_3m: 0,
+          change_30m: null,
+          change_30m_pct: null
+        };
+      });
+
+    res.json(result);
+  } catch (e) {
+    console.error('ranking tr query failed:', e);
+    res.status(500).json({ error: 'ranking tr query failed' });
   }
 });
 
@@ -4038,6 +4133,7 @@ function startAlertMonitor() {
     updateWindow10m().then(() => console.log(`[ColdStart] Window10m done in ${Date.now() - coldStartTime}ms`)),
     updateWindow30m().then(() => console.log(`[ColdStart] Window30m done in ${Date.now() - coldStartTime}ms`)),
     refreshRankingCache().then(() => console.log(`[ColdStart] RankingCache done in ${Date.now() - coldStartTime}ms`)),
+    refreshRankingCacheTr().then(() => console.log(`[ColdStart] RankingCacheTr done in ${Date.now() - coldStartTime}ms`)),
     updatePrice30mCache().then(() => console.log(`[ColdStart] Price30mCache done in ${Date.now() - coldStartTime}ms`)),
   ]).then(() => {
     serverReady = true;
@@ -4059,6 +4155,7 @@ function startAlertMonitor() {
 
   // RankingCache：不再等待 warmUpPriceCache，首次已在并行冷启动中完成
   runScan('RankingCache', refreshRankingCache, 10000);
+  runScan('RankingCacheTr', refreshRankingCacheTr, 10000);
 
   console.log(`[Window10m] starting, interval=10s`);
   runScan('Window10m', updateWindow10m, 10000);
@@ -4750,6 +4847,7 @@ app.get('/volume-alerts',   (req, res) => res.sendFile(path.join(__dirname, '../
 app.get('/hills',           (req, res) => res.sendFile(path.join(__dirname, '../public/hills.html')));
 app.get('/hill-alerts',     (req, res) => res.sendFile(path.join(__dirname, '../public/hill-alerts.html')));
 app.get('/ranking',         (req, res) => res.sendFile(path.join(__dirname, '../public/ranking.html')));
+app.get('/ranking-tr',      (req, res) => res.sendFile(path.join(__dirname, '../public/ranking_tr.html')));
 // /large-orders 页面已停用
 app.get('/l2-alerts',       (req, res) => res.sendFile(path.join(__dirname, '../public/l2_alert_history.html')));
 app.get('/swing-screener',  (req, res) => res.sendFile(path.join(__dirname, '../public/swing-screener.html')));

@@ -103,8 +103,8 @@
         <a href="/volume-alerts">放量提醒</a>
         <a href="/hills">山丘形态</a>
         <a href="/hill-alerts">山丘放量</a>
-        <a href="/ranking" class="active">涨跌排名</a>
-        <a href="/ranking-tr">TR排名</a>
+        <a href="/ranking">涨跌排名</a>
+        <a href="/ranking-tr" class="active">TR排名</a>
         <a href="/l2-alerts">L2大单</a>
         <a href="/screener">选股器</a>
         <a href="/stable-screener">稳定选股</a>
@@ -117,7 +117,7 @@
     </div>
 
     <div class="header-bar">
-        <h1 class="title" id="page-title">今日涨跌排名</h1>
+        <h1 class="title" id="page-title">今日涨跌排名 (TR)</h1>
         <div class="controls">
             <button class="btn-toggle-filters" id="btn-rank-mode" onclick="toggleRankMode()" title="切换排名指标：今日涨跌 / 近30分钟涨跌">⏱ 半小时涨跌榜</button>
             <button class="btn-toggle-filters" id="btn-toggle-filters" onclick="toggleFilters()">▾ 筛选</button>
@@ -185,6 +185,8 @@
     const swingPinnedSymbols = new Map();
     const SWING_PIN_MS = 2 * 60 * 1000; // 2分钟
 
+    // ── 波动筛选器/放量筛选暂不适用 TR 市场 ──
+    /*
     async function refreshSwingScreener() {
         try {
             const res = await fetch('/api/price-swing-screener');
@@ -219,6 +221,7 @@
     }
     refreshVolumeSurge();
     setInterval(refreshVolumeSurge, 60000);
+    */
 
     let dualSort = {
         up:   { col: 'change_pct', dir: 'desc' },
@@ -502,7 +505,7 @@
         syncFiltersToUrl();
         try {
             const minVol = document.getElementById('min-volume').value;
-            const apiUrl = `/api/ranking?min_volume=${minVol}`;
+            const apiUrl = `/api/ranking-tr?min_volume=${minVol}`;
             const cacheKey = makeCacheKey(apiUrl);
 
             // Stale-While-Revalidate: 先用缓存数据渲染（若有），再后台刷新
