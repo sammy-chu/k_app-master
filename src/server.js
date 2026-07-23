@@ -4865,6 +4865,7 @@ app.get('/ranking',         (req, res) => res.sendFile(path.join(__dirname, '../
 app.get('/ranking-tr',      (req, res) => res.sendFile(path.join(__dirname, '../public/ranking_tr.html')));
 // /large-orders 页面已停用
 app.get('/l2-alerts',       (req, res) => res.sendFile(path.join(__dirname, '../public/l2_alert_history.html')));
+app.get('/l2-alerts-tr',    (req, res) => res.sendFile(path.join(__dirname, '../public/l2_alert_history_tr.html')));
 app.get('/swing-screener',  (req, res) => res.sendFile(path.join(__dirname, '../public/swing-screener.html')));
 app.get('/screener',        (req, res) => res.sendFile(path.join(__dirname, '../public/screener.html')));
 app.get('/stable-screener', (req, res) => res.sendFile(path.join(__dirname, '../public/screener-stable.html')));
