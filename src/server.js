@@ -1890,26 +1890,33 @@ app.get('/api/ohlcv', async (req, res) => {
 app.get('/api/l2-active-orders', async (req, res) => {
   try {
     const market = String(req.query.market || 'BL').toLowerCase();
-    const ALLOWED_MARKETS = new Set(['bl', 'sh', 'sz']);
+    const ALLOWED_MARKETS = new Set(['bl', 'sh', 'sz', 'tr']);
     if (!ALLOWED_MARKETS.has(market)) {
       return res.status(400).json({ error: 'invalid_market' });
     }
-    const table = `market_data.l2_active_orders_${market}`;
+
+    // 市场感知表映射：TR 走 _tr 后缀且额外取 os.last_price 作兜底；
+    // 其余市场沿用 BL 默认（非后缀）表 + 内存 priceCache。
+    const isTr       = market === 'tr';
+    const table      = `market_data.l2_active_orders_${market}`;
+    const ohlcTable  = isTr ? 'market_data.ohlc_snapshot_tr' : 'market_data.ohlc_snapshot';
+    const lastTable  = isTr ? 'market_data.last_price_tr'    : 'market_data.last_price';
+    const dailyTable = isTr ? 'market_data.daily_summary_tr' : 'market_data.daily_summary';
+    const osLastCol  = isTr ? ', os.last_price AS os_last_price' : '';
 
     const sql = `
       SELECT
         a.stock_code, a.alert_type, a.price, a.volume, a.depth,
         a.price_ratio, a.median_vol, a.first_seen, a.last_seen, a.alive_rounds,
-        -- 与 ranking 页面一致：ohlc_snapshot.volume 优先，无则回退 daily_summary.total_volume
         COALESCE(os.volume, d.total_volume, 0) AS total_volume,
         os.open_price AS open_price,
-        lp.price AS lp_last_price
+        lp.price AS lp_last_price${osLastCol}
       FROM ${table} a
-      LEFT JOIN market_data.daily_summary d
+      LEFT JOIN ${dailyTable} d
              ON d.symbol = a.stock_code AND d.trade_date = CURRENT_DATE
-      LEFT JOIN market_data.ohlc_snapshot os
+      LEFT JOIN ${ohlcTable} os
              ON os.symbol = a.stock_code AND os.trade_date = CURRENT_DATE
-      LEFT JOIN market_data.last_price lp
+      LEFT JOIN ${lastTable} lp
              ON lp.symbol = a.stock_code
       WHERE a.trade_date = CURRENT_DATE
       ORDER BY a.price_ratio DESC NULLS LAST
@@ -1920,10 +1927,18 @@ app.get('/api/l2-active-orders', async (req, res) => {
     const enriched = rows.map(row => {
       const openPrice = Number(row.open_price);
       if (!openPrice) return { ...row, day_change_pct: null, day_change_amt: null };
-      // last_price 优先级: market_data.last_price(新表，逐笔成交) > priceCache(tos_trades) > 挂单价
-      const lpPrice   = Number(row.lp_last_price) || 0;
-      const cached    = priceCache.get(row.stock_code);
-      const lastPrice = lpPrice > 0 ? lpPrice : (cached ? cached.price : Number(row.price));
+      const lpPrice = Number(row.lp_last_price) || 0;
+
+      let lastPrice;
+      if (isTr) {
+        // TR 无 priceCache：last_price_tr → ohlc_snapshot_tr.last_price → 挂单价
+        const osPrice = Number(row.os_last_price) || 0;
+        lastPrice = lpPrice > 0 ? lpPrice : (osPrice > 0 ? osPrice : Number(row.price));
+      } else {
+        const cached = priceCache.get(row.stock_code);
+        lastPrice = lpPrice > 0 ? lpPrice : (cached ? cached.price : Number(row.price));
+      }
+
       const changeAmt = lastPrice - openPrice;
       const changePct = Number((changeAmt / openPrice * 100).toFixed(2));
       return {
