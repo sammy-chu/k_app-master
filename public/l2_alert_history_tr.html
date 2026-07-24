@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>L2 大单历史</title>
+    <title>TR L2 大单</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -404,8 +404,8 @@
         <a href="/hills">山丘形态</a>
         <a href="/hill-alerts">山丘放量</a>
         <a href="/ranking">涨跌排名</a>
-        <a href="/l2-alerts" class="active">L2大单</a>
-        <a href="/l2-alerts-tr">L2大单-TR</a>
+        <a href="/l2-alerts">L2大单</a>
+        <a href="/l2-alerts-tr" class="active">L2大单-TR</a>
     
         <a href="/screener">选股器</a>
     <a href="/stable-screener">稳定选股</a>
@@ -418,7 +418,7 @@
     </div>
 
     <div class="header-bar">
-        <h1 class="title">L2 大单历史</h1>
+        <h1 class="title">TR L2 大单</h1>
         <div class="controls">
             <button class="divider-reset-btn hidden" id="btn-reset-divider" onclick="resetDivider()">↺ 重置分隔线</button>
             <span class="refresh-info" id="refresh-timer">5s 后刷新</span>
@@ -458,7 +458,7 @@
         </div>
         <div class="filter-group">
             <label>代码</label>
-            <input type="text" id="filter-symbol" placeholder="如 BABA.BL" style="width:110px">
+            <input type="text" id="filter-symbol" placeholder="如 THYAO.TR" style="width:110px">
         </div>
         <div class="filter-group">
             <label>最小倍数</label>
@@ -534,7 +534,7 @@
             <button class="modal-close" onclick="closeBlockModal()">×</button>
         </div>
         <div class="modal-add">
-            <input type="text" id="manual-block-input" placeholder="手动输入代码,如 BABA.BL">
+            <input type="text" id="manual-block-input" placeholder="手动输入代码,如 THYAO.TR">
             <button onclick="addManualBlock()">添加屏蔽</button>
         </div>
         <div class="modal-body" id="block-list"></div>
@@ -600,7 +600,7 @@
     const LS_KEY = 'sharedBlockedStocks';
     let blockedStocks = new Set(JSON.parse(localStorage.getItem(LS_KEY) || '[]'));
     const NAV_STATE_KEY = 'rememberedFilterUrls';
-    const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/abnormal-trades','/boundary-alerts','/oscillator-screener','/l2-alerts','/large-orders','/volatility','/alerts','/volume-alerts','/volume-surge']);
+    const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/abnormal-trades','/boundary-alerts','/oscillator-screener','/l2-alerts','/l2-alerts-tr','/large-orders','/volatility','/alerts','/volume-alerts','/volume-surge']);
 
     function readFiltersFromDom() {
         return {
@@ -802,7 +802,7 @@
 
     async function fetchRankingData() {
         try {
-            const res = await fetch('/api/ranking');
+            const res = await fetch('/api/ranking-tr');
             if (!res.ok) return;
             const rows = await res.json();
 
@@ -826,8 +826,8 @@
 
     function buildApiUrl() {
         syncFiltersToUrl();
-        // 数据源切换到实时活跃大单表（与窗口程序"活跃大单"面板一致）
-        return '/api/l2-active-orders';
+        // TR 市场实时活跃大单
+        return '/api/l2-active-orders?market=tr';
     }
 
     async function fetchData() {
