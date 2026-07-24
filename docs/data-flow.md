@@ -5,7 +5,7 @@
 ```
 PostgreSQL (market_data)
     │
-    ├─ tos_trades ──────────────┐
+    ├─ tos_trades_bl ──────────────┐
     ├─ l1_quote_bl ─────────────┤
     ├─ ohlc_snapshot ───────────┤
     ├─ last_price ──────────────┤  读取（10s/60s 周期）
@@ -55,7 +55,7 @@ PostgreSQL (market_data)
 ### 1. 价格链路
 
 ```
-tos_trades (received_at DESC)
+tos_trades_bl (received_at DESC)
   → [10s] updatePriceCache()        → priceCache (symbol → {price, receivedAt})
   → [10s] updatePriceWindow()       → priceWindow (symbol → [{price, receivedAt}...])
   → [10s] updateWindow10m()         → window10m (symbol → [{bucket,O,H,L,C,V}...])

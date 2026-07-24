@@ -62,7 +62,7 @@ K_App 的窗口聚合是计算中间态，不对外提供 K 线查询服务。
 
 | 表 | 写入者 | 说明 |
 |----|--------|------|
-| `tos_trades` | PPro8 UDP Listener | 逐笔成交 |
+| `tos_trades_bl` | PPro8 UDP Listener | 逐笔成交 |
 | `l1_quote_bl` | PPro8 L1 Listener | L1 报价 |
 | `l2_order_book_bl_default` | PPro8 L2 Listener | L2 盘口深度 |
 | `l2_active_orders_bl` | orderbook_processor | 活跃大单 |

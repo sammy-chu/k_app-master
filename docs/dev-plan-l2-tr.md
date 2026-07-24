@@ -8,7 +8,7 @@
 
 ## 数据前提（已确认）
 
-TR 侧四张依赖表均存在且在写入：`l2_active_orders_tr`、`ohlc_snapshot_tr`、`last_price_tr`、`daily_summary_tr`。TR 无 `priceCache`（`tos_trades` 为 BL 源），故 TR 分支跳过 priceCache，改用 `ohlc_snapshot_tr.last_price` 作中间兜底。
+TR 侧四张依赖表均存在且在写入：`l2_active_orders_tr`、`ohlc_snapshot_tr`、`last_price_tr`、`daily_summary_tr`。TR 无 `priceCache`（`tos_trades_bl` 为 BL 源），故 TR 分支跳过 priceCache，改用 `ohlc_snapshot_tr.last_price` 作中间兜底。
 
 ## 涉及文件
 

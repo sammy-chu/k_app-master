@@ -85,7 +85,7 @@
 
 **额外目标**：
 - 定时任务 watchdog：某任务连续失败 N 次 → 输出告警日志
-- 数据延迟检测：`tos_trades.received_at` 距当前时间超过阈值 → 标记数据断流
+- 数据延迟检测：`tos_trades_bl.received_at` 距当前时间超过阈值 → 标记数据断流
 - 前端健康面板：顶部显示各数据源状态（绿/黄/红）
 
 ### 参数版本管理（P1）
@@ -141,7 +141,7 @@
 | 进程重启恢复 | 非持久化缓存的快照保存（boundaryAlertMap 等） | P2 |
 
 **Redis 不应承载**：
-- 高频逐笔明细（tos_trades 级别数据不走 Redis）
+- 高频逐笔明细（tos_trades_bl 级别数据不走 Redis）
 - 权威持久化存储（信号历史必须在 PostgreSQL）
 - 复杂查询（时间范围查询、聚合计算仍走 PG）
 

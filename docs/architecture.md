@@ -5,7 +5,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  外部数据采集层（不属于本项目）                                       │
-│  PPro8 UDP Listener → tos_trades / l1_quote_bl / l2_order_book  │
+│  PPro8 UDP Listener → tos_trades_bl / l1_quote_bl / l2_order_book  │
 │  ohlc_writer.py → ohlc_snapshot                                 │
 │  orderbook_processor_bl.py → l2_active_orders / events / intra  │
 │  monitor_market.py → active_trading_symbols                     │
@@ -53,7 +53,7 @@
 
 ## 核心设计原则
 
-1. **只读上游** — 本项目不写入 `tos_trades`、`l1_quote_bl`、`l2_order_book` 等原始表，只读取并聚合。
+1. **只读上游** — 本项目不写入 `tos_trades_bl`、`l1_quote_bl`、`l2_order_book` 等原始表，只读取并聚合。
 2. **内存优先** — 高频指标全部基于内存缓存计算（Map），避免每次 API 请求触发数据库查询。
 3. **双连接池隔离** — `pool`（主池）面向低频 API 和告警写入，`pricePool` 面向高频 10s 循环任务，互不干扰。
 4. **冷启动 + 增量** — 启动时查历史窗口填满缓存，之后仅查增量数据合并。
@@ -175,7 +175,7 @@ const MARKETS = {
     resetTime: '07:55',           // 跨天清理时间
     symbolSuffix: '.BL',
     tables: {
-      trades: 'tos_trades',
+      trades: 'tos_trades_bl',
       quote: 'l1_quote_bl',
       l2ActiveOrders: 'l2_active_orders_bl',
       l2Events: 'l2_order_events_bl',

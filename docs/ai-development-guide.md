@@ -7,7 +7,7 @@
 ### 绝对禁止
 
 1. **不允许修改外部数据采集进程**（ohlc_writer.py / orderbook_processor_bl.py / monitor_market.py / volatility_scanner.py / PPro8 UDP Listener）
-2. **不允许修改原始行情表结构**（tos_trades / l1_quote_bl / l2_order_book_bl_default / ohlc_snapshot / last_price）
+2. **不允许修改原始行情表结构**（tos_trades_bl / l1_quote_bl / l2_order_book_bl_default / ohlc_snapshot / last_price）
 3. **不允许让 K_App 承担数据采集职责**（不接 UDP、不连 PPro8、不写原始表）
 4. **不允许让 K_App 生产权威历史 K 线**（window10m / window30m 是临时计算窗口，不对外提供）
 5. **不允许在 K_App 中实现下单 / 自动交易逻辑**

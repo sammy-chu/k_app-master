@@ -1,5 +1,10 @@
 const { Pool } = require('pg');
 
+// ══════════════════════════════════════════════════════════════
+// [TRADES] 统一读取表名常量
+// ══════════════════════════════════════════════════════════════
+const TRADES_TABLE = 'market_data.tos_trades_bl';
+
 // 独立运行时使用的连接池配置
 const dbConfig = {
   host: process.env.PGHOST || '192.168.31.247',
@@ -14,7 +19,7 @@ const dbConfig = {
  *
  * [FIX-A] 改用独立 client 执行所有查询，设置 statement_timeout = 20000
  * [FIX-B] 获取最新日期改为范围查询，避免全表 MAX 扫描
- * [FIX-C] 主查询 WHERE 改为范围写法，让 idx_tos_trades_symbol_received 索引生效
+ * [FIX-C] 主查询 WHERE 改为范围写法，让 idx_tos_trades_bl_symbol_received 索引生效
  * [FIX-D] 山丘边界检测循环移除多余的指针增减，直接 break
  */
 async function getFlexibleHills(pool, dateStr) {
@@ -30,7 +35,7 @@ async function getFlexibleHills(pool, dateStr) {
       // [FIX-B] 加 WHERE 范围条件，避免对 113 万行做全表 MAX 扫描
       const dateRes = await client.query(`
         SELECT MAX(received_at)::date AS last_date
-        FROM tos_trades
+        FROM ${TRADES_TABLE}
         WHERE received_at >= NOW() - INTERVAL '7 days'
       `);
       targetDate = dateRes.rows[0].last_date;
@@ -49,7 +54,7 @@ async function getFlexibleHills(pool, dateStr) {
         date_trunc('minute', t.received_at)  AS bucket,
         SUM(t.size)::numeric                 AS volume,
         AVG(t.price::numeric)                AS avg_price
-      FROM tos_trades t
+      FROM ${TRADES_TABLE} t
       JOIN user_symbols u ON u.symbol = t.symbol
       WHERE t.received_at >= NOW() - INTERVAL '60 minutes'
         AND t.received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'

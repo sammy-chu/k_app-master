@@ -6,6 +6,11 @@ const { Pool } = require('pg');
 const { getFlexibleHills } = require('./scan-flexible-hills');
 const ConfigManager = require('./config-manager');
 
+// ══════════════════════════════════════════════════════════════
+// [TRADES] 统一读取表名常量 — 回滚只改这一行
+// ══════════════════════════════════════════════════════════════
+const TRADES_TABLE = 'market_data.tos_trades_bl';
+
 const app = express();
 app.use(compression());
 
@@ -371,7 +376,7 @@ async function updatePriceCache() {
     await client.query('SET statement_timeout = 5000');
     const { rows } = await client.query(`
       SELECT DISTINCT ON (symbol) symbol, price::numeric AS price, received_at
-      FROM market_data.tos_trades
+      FROM ${TRADES_TABLE}
       WHERE received_at >= NOW() - INTERVAL '1 minute'
         AND price > 0
       ORDER BY symbol, received_at DESC, id DESC
@@ -393,7 +398,7 @@ async function warmUpPriceCache() {
     await client.query('SET statement_timeout = 15000');
     const { rows } = await client.query(`
       SELECT DISTINCT ON (symbol) symbol, price::numeric AS price, received_at
-      FROM market_data.tos_trades
+      FROM ${TRADES_TABLE}
       WHERE received_at >= NOW() - INTERVAL '30 minutes'
         AND price > 0
       ORDER BY symbol, received_at DESC, id DESC
@@ -535,7 +540,7 @@ async function updatePriceWindow() {
   try {
     const { rows } = await client.query(`
       SELECT symbol, price::numeric AS price, received_at
-      FROM tos_trades
+      FROM ${TRADES_TABLE}
       WHERE received_at >= NOW() - INTERVAL '2 minutes'
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
       ORDER BY symbol, received_at ASC, id ASC
@@ -553,7 +558,7 @@ async function updatePriceWindow() {
 }
 
 // [Window7m] 7分钟每分钟 OHLCV 聚合缓存（方案A: GROUP BY）
-// 走 idx_tos_trades_received_at 索引，实测 ~71ms / 31628 行 / 2839 bars
+// 走 idx_tos_trades_bl_received_at 索引，实测 ~71ms / 31628 行 / 2839 bars
 // 仅用 pricePool，与其他 pricePool 任务完全隔离，不影响任何现有功能
 async function updateWindow10m() {
   const client = await pricePool.connect();
@@ -568,7 +573,7 @@ async function updateWindow10m() {
         MIN(price::numeric)                                                AS low,
         (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close,
         COALESCE(SUM(size::numeric), 0)                                   AS volume
-      FROM tos_trades
+      FROM ${TRADES_TABLE}
       WHERE received_at >= NOW() - INTERVAL '10 minutes'
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
         AND price IS NOT NULL
@@ -626,7 +631,7 @@ async function updateWindow30m() {
         MIN(price::numeric)                                                AS low,
         (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close,
         COALESCE(SUM(size::numeric), 0)                                   AS volume
-      FROM tos_trades
+      FROM ${TRADES_TABLE}
       WHERE received_at >= $1
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
         AND price IS NOT NULL
@@ -685,7 +690,7 @@ async function updatePrice30mCache() {
         symbol,
         price::numeric AS price,
         received_at    AS at
-      FROM tos_trades
+      FROM ${TRADES_TABLE}
       WHERE received_at BETWEEN NOW() - INTERVAL '31 minutes'
                              AND NOW() - INTERVAL '29 minutes'
         AND received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + INTERVAL '8 hours'
@@ -1741,7 +1746,7 @@ app.get('/api/price-snapshot', async (req, res) => {
 
     const currentRes = await pool.query(`
       SELECT price::numeric
-      FROM tos_trades
+      FROM ${TRADES_TABLE}
       WHERE symbol = $1
       ORDER BY received_at DESC, id DESC
       LIMIT 1
@@ -1749,7 +1754,7 @@ app.get('/api/price-snapshot', async (req, res) => {
 
     const prevRes = await pool.query(`
       SELECT price::numeric
-      FROM tos_trades
+      FROM ${TRADES_TABLE}
       WHERE symbol = $1
         AND received_at <= (now() AT TIME ZONE 'Asia/Shanghai' - ($2 || ' minutes')::interval)
       ORDER BY received_at DESC, id DESC
@@ -1791,7 +1796,7 @@ app.get('/api/ohlcv', async (req, res) => {
                  WHEN trim(t.trade_time) ~ '^\\d{4}-\\d{2}-\\d{2}' THEN date_trunc('minute', trim(t.trade_time)::timestamp)
                  ELSE date_trunc('minute', (p.target_date || ' ' || trim(t.trade_time))::timestamp)
                END AS bucket
-        FROM tos_trades t
+        FROM ${TRADES_TABLE} t
         JOIN params p ON p.symbol = t.symbol
         WHERE (
           (trim(t.trade_time) ~ '^\\d{4}-\\d{2}-\\d{2}' AND LEFT(trim(t.trade_time), 10) = p.target_date) OR
@@ -2055,7 +2060,7 @@ app.get('/api/l2-alert-history', async (req, res) => {
 
     const { rows } = await pricePool.query(sql, params);
 
-    // last_price 优先级: market_data.last_price(新表，逐笔成交) > priceCache(tos_trades) > 挂单价
+    // last_price 优先级: market_data.last_price(新表，逐笔成交) > priceCache(tos_trades_bl) > 挂单价
     const enriched = rows.map(row => {
       const openPrice = Number(row.open_price);
       if (!openPrice) return { ...row, day_change_pct: null, day_change_amt: null };
@@ -2114,21 +2119,21 @@ app.get('/api/test-db', async (req, res) => {
     const tableCheck = await pool.query(`
       SELECT table_name
       FROM information_schema.tables
-      WHERE table_schema = $1 AND table_name = 'tos_trades'
+      WHERE table_schema = $1 AND table_name = 'tos_trades_bl'
     `, [process.env.PGSCHEMA || 'market_data']);
 
     if (tableCheck.rows.length === 0) {
-      return res.json({ error: 'tos_trades table not found', schema: process.env.PGSCHEMA || 'market_data' });
+      return res.json({ error: 'tos_trades_bl table not found', schema: process.env.PGSCHEMA || 'market_data' });
     }
 
     const columns = await pool.query(`
       SELECT column_name, data_type
       FROM information_schema.columns
-      WHERE table_schema = $1 AND table_name = 'tos_trades'
+      WHERE table_schema = $1 AND table_name = 'tos_trades_bl'
       ORDER BY ordinal_position
     `, [process.env.PGSCHEMA || 'market_data']);
 
-    const sample = await pool.query('SELECT * FROM tos_trades LIMIT 3');
+    const sample = await pool.query(`SELECT * FROM ${TRADES_TABLE} LIMIT 3`);
 
     return res.json({
       table_exists: true,
@@ -3430,7 +3435,7 @@ app.post('/api/volume/daily-refresh', async (req, res) => {
                   END) AS trade_date,
              SUM(size) AS daily_volume,
              now()
-      FROM tos_trades
+      FROM ${TRADES_TABLE}
       WHERE DATE(CASE
                    WHEN trim(trade_time) ~ '^\\d{4}-\\d{2}-\\d{2}' THEN trim(trade_time)::timestamp
                    ELSE created_at
@@ -3517,7 +3522,7 @@ app.get('/api/volume/cumulative', async (req, res) => {
 
   const sql = `
     SELECT COALESCE(SUM(size), 0) AS cumulative_vol
-    FROM tos_trades
+    FROM ${TRADES_TABLE}
     WHERE symbol = $1 AND (
       (trim(trade_time) ~ '^\\d{4}-\\d{2}-\\d{2}' AND trim(trade_time)::timestamp >= $2::timestamp AND trim(trade_time)::timestamp < ($2::date + INTERVAL '1 day'))
       OR
@@ -3584,7 +3589,7 @@ app.post('/api/alerts/daily-volume-pct/scan', async (req, res) => {
 
   const cumRes = await pool.query(
     `SELECT COALESCE(SUM(size), 0) AS val, date_trunc('minute', now()) as now_bucket
-     FROM tos_trades
+     FROM ${TRADES_TABLE}
      WHERE symbol = $1 AND (
        (trim(trade_time) ~ '^\\d{4}-\\d{2}-\\d{2}' AND trim(trade_time)::timestamp >= $2::timestamp AND trim(trade_time)::timestamp < ($2::date + INTERVAL '1 day'))
        OR
@@ -3641,7 +3646,7 @@ async function scanAndInsertAlerts() {
           (t.received_at AT TIME ZONE 'Asia/Shanghai') AS ts_local,
           t.price::numeric AS price,
           date_trunc('minute', (t.received_at AT TIME ZONE 'Asia/Shanghai')) AS bucket_local
-        FROM tos_trades t
+        FROM ${TRADES_TABLE} t
         WHERE t.price IS NOT NULL AND t.price::numeric > 0
           AND COALESCE(t.size::numeric, 0) > 0
           AND t.received_at >= ((SELECT prev_bucket_local FROM params) AT TIME ZONE 'Asia/Shanghai')
@@ -3716,7 +3721,7 @@ async function ensureVolumeAlertSchema() {
 }
 
 // initOpenPrice：每60秒定期补写，持续覆盖当日 open_price IS NULL 的行
-// 数据源：tos_trades 当日 08:00 至今的第一笔成交（全天范围，覆盖盘中新股）
+// 数据源：tos_trades_bl 当日 08:00 至今的第一笔成交（全天范围，覆盖盘中新股）
 // 只更新 open_price IS NULL 的行，已有开盘价的行不覆盖
 // 无 openPriceDone 限制，新股上市后下一个60秒自动补写
 let _openPriceRunning = false;
@@ -3736,7 +3741,7 @@ async function initOpenPrice() {
       FROM (
         SELECT symbol,
           (array_agg(price::numeric ORDER BY received_at ASC, id ASC))[1] AS open_price
-        FROM market_data.tos_trades
+        FROM ${TRADES_TABLE}
         WHERE received_at >= current_date AT TIME ZONE 'Asia/Shanghai' + interval '8 hours'
           AND received_at <  current_date AT TIME ZONE 'Asia/Shanghai' + interval '9 hours'
           AND price IS NOT NULL AND price::numeric > 0
@@ -3802,7 +3807,7 @@ async function updateDailySummary() {
 
   const client = await pool.connect();
   try {
-    // ── Step 1：从 tos_trades 增量聚合 upsert（close/high/low）─────────────────
+    // ── Step 1：从 tos_trades_bl 增量聚合 upsert（close/high/low）─────────────────
     // 冷启动（lastDailySummaryRunAt=null）：全量补算当日 08:00 HKT（UTC 00:00）至今
     // 正常增量：只扫 lastDailySummaryRunAt 之后的新成交，数据量约 3000-4000 条/分钟
     // 时段限制：UTC 00:00-09:00（北京时间 08:00-17:00），彻底隔离盘前盘后极值
@@ -3824,7 +3829,7 @@ async function updateDailySummary() {
           (array_agg(price::numeric ORDER BY received_at DESC, id DESC))[1] AS close_price,
           MAX(price::numeric)                                                AS high_price,
           MIN(price::numeric)                                                AS low_price
-        FROM market_data.tos_trades
+        FROM ${TRADES_TABLE}
         WHERE received_at >= $1::timestamptz
           AND received_at <  $2::timestamptz
           AND received_at <  $4::timestamptz
@@ -3886,7 +3891,7 @@ async function scanAllVolumeAlerts() {
     await pool.query(`
       INSERT INTO tos_daily_volume(symbol, trade_date, daily_volume, updated_at)
       SELECT symbol, DATE(received_at), SUM(size), now()
-      FROM tos_trades
+      FROM ${TRADES_TABLE}
       WHERE received_at >= $1::date AND received_at < ($1::date + INTERVAL '1 day')
       GROUP BY symbol, DATE(received_at)
       ON CONFLICT (symbol, trade_date)
@@ -3897,7 +3902,7 @@ async function scanAllVolumeAlerts() {
     await pool.query(`
       INSERT INTO tos_daily_volume(symbol, trade_date, daily_volume, updated_at)
       SELECT symbol, DATE(received_at), SUM(size), now()
-      FROM tos_trades
+      FROM ${TRADES_TABLE}
       WHERE received_at > $1::timestamptz
         AND received_at < $2::timestamptz
         AND DATE(received_at) = $3::date
@@ -4030,7 +4035,7 @@ async function scanIntradayVolumeSurge() {
     const { rows } = await pool.query(`
       WITH window_vol AS (
         SELECT t.symbol, SUM(t.size) AS vol
-        FROM market_data.tos_trades t
+        FROM ${TRADES_TABLE} t
         INNER JOIN market_data.daily_summary ds
           ON ds.symbol = t.symbol AND ds.trade_date = current_date
         WHERE t.received_at >= NOW() - ($1 * INTERVAL '1 minute')
