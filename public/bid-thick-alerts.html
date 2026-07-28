@@ -156,7 +156,13 @@
     }
 
     function toggleDetail(id) {
-        if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
+        // 由于 id 可能是字符串（如从数据库获取的 BIGINT 可能被转为字符串），统一转为字符串处理
+        const strId = String(id);
+        if (expanded.has(strId)) {
+            expanded.delete(strId);
+        } else {
+            expanded.add(strId);
+        }
         renderActive();
         renderHistory();
     }
@@ -183,9 +189,10 @@
             <th>最小买量</th><th>L1 Bid</th><th>L1 Ask</th><th>持续时间</th><th>发现时间</th><th>#</th>
         </tr></thead><tbody>`;
         activeData.forEach((r, i) => {
-            const icon = expanded.has(r.id) ? '▼' : '▶';
+            const strId = String(r.id);
+            const icon = expanded.has(strId) ? '▼' : '▶';
             html += `<tr class="data-row active-row">
-                <td class="expand-cell" onclick="toggleDetail(${r.id})">${icon}</td>
+                <td class="expand-cell" onclick="toggleDetail('${strId}')">${icon}</td>
                 <td><span class="symbol">${r.symbol}</span></td>
                 <td>${r.levels_compared ?? '—'}</td>
                 <td><span class="ratio-val">${fmtRatio(r.min_ratio)}</span></td>
@@ -198,7 +205,7 @@
                 <td class="time-cell">${fmtTime(r.detected_at)}</td>
                 <td>${i+1}</td>
             </tr>`;
-            if (expanded.has(r.id)) html += detailRowHtml(r, COLS);
+            if (expanded.has(strId)) html += detailRowHtml(r, COLS);
         });
         html += '</tbody></table>';
         el.innerHTML = html;
@@ -233,9 +240,10 @@
             <th>恢复时间</th><th>#</th>
         </tr></thead><tbody>`;
         historyData.forEach((r, i) => {
-            const icon = expanded.has(r.id) ? '▼' : '▶';
+            const strId = String(r.id);
+            const icon = expanded.has(strId) ? '▼' : '▶';
             html += `<tr class="data-row">
-                <td class="expand-cell" onclick="toggleDetail(${r.id})">${icon}</td>
+                <td class="expand-cell" onclick="toggleDetail('${strId}')">${icon}</td>
                 <td><span class="symbol">${r.symbol}</span></td>
                 <td>${r.levels_compared ?? '—'}</td>
                 <td><span class="ratio-val">${fmtRatio(r.min_ratio)}</span></td>
@@ -249,7 +257,7 @@
                 <td class="time-cell">${fmtTime(r.recovered_at)}</td>
                 <td>${i+1}</td>
             </tr>`;
-            if (expanded.has(r.id)) html += detailRowHtml(r, COLS);
+            if (expanded.has(strId)) html += detailRowHtml(r, COLS);
         });
         html += '</tbody></table>';
         el.innerHTML = html;
