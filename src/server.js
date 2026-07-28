@@ -4902,11 +4902,19 @@ app.get('/api/bid-thick-alerts', async (req, res) => {
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
     paramIdx++;
-    const sql = `
-      SELECT id, symbol, levels_compared, min_ratio, avg_ratio, max_ratio,
+    // 如果没有按照 detected_at 排序（默认或用户指定），我们在非 detected_at 排序时也希望做到 symbol 去重
+    // 因此这里通过一个公用的 DISTINCT ON 嵌套子查询来处理
+    let sql = `
+      SELECT DISTINCT ON (symbol) id, symbol, levels_compared, min_ratio, avg_ratio, max_ratio,
              min_bid_vol, l1_bid, l1_ask, levels, detected_at, recovered_at, duration_sec
       FROM market_data.bid_thick_alert_tr
       ${where}
+      ORDER BY symbol, detected_at DESC
+    `;
+    
+    // 为了能够对 DISTINCT ON 的结果应用外层排序和 LIMIT，需要嵌套查询
+    sql = `
+      SELECT * FROM (${sql}) as distinct_records
       ORDER BY ${sort} ${order}
       LIMIT $${paramIdx}
     `;
