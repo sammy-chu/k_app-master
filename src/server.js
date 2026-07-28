@@ -4855,6 +4855,71 @@ app.get('/api/crossed-market-alerts', async (req, res) => {
   }
 });
 
+// === Bid Thickness Alert API (买盘厚度告警,只读) ===
+app.get('/api/bid-thick-alerts', async (req, res) => {
+  try {
+    const symbol = (req.query.symbol || '').trim().toUpperCase();
+    const status = req.query.status || 'all'; // active | recovered | all
+    const hours  = parseInt(req.query.hours) || 24;
+    const limit  = Math.min(parseInt(req.query.limit) || 100, 500);
+    const sort   = ['avg_ratio', 'min_ratio', 'max_ratio', 'duration_sec', 'detected_at'].includes(req.query.sort)
+      ? req.query.sort : 'detected_at';
+    const order  = req.query.order === 'asc' ? 'ASC' : 'DESC';
+
+    const conditions = [];
+    const params = [];
+    let paramIdx = 0;
+
+    // 时间范围(仅对 recovered 和 all 生效)
+    if (status !== 'active') {
+      paramIdx++;
+      conditions.push(`detected_at > NOW() - interval '1 hour' * $${paramIdx}`);
+      params.push(hours);
+    }
+
+    // symbol 过滤
+    if (symbol) {
+      paramIdx++;
+      conditions.push(`symbol ILIKE $${paramIdx}`);
+      params.push(`%${symbol}%`);
+    }
+
+    // 最小倍数阈值(作用于 avg_ratio)
+    const minRatio = parseFloat(req.query.min_ratio);
+    if (!isNaN(minRatio) && minRatio > 0) {
+      paramIdx++;
+      conditions.push(`avg_ratio >= $${paramIdx}`);
+      params.push(minRatio);
+    }
+
+    // 状态过滤
+    if (status === 'active') {
+      conditions.push('recovered_at IS NULL');
+    } else if (status === 'recovered') {
+      conditions.push('recovered_at IS NOT NULL');
+    }
+
+    const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+
+    paramIdx++;
+    const sql = `
+      SELECT id, symbol, levels_compared, min_ratio, avg_ratio, max_ratio,
+             min_bid_vol, l1_bid, l1_ask, levels, detected_at, recovered_at, duration_sec
+      FROM market_data.bid_thick_alert_tr
+      ${where}
+      ORDER BY ${sort} ${order}
+      LIMIT $${paramIdx}
+    `;
+    params.push(limit);
+
+    const result = await pool.query(sql, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('[bid-thick-alerts] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 静态文件服务
 app.use(express.static(path.join(__dirname, '../public'), {
     setHeaders: (res) => {
