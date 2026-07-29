@@ -1,1 +1,218 @@
-﻿<!doctype html><title>volume-surge-alerts</title>ok
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>放量引爆监控</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1a1a1a; color: #ddd; padding: 20px; }
+        .container { max-width: 1900px; margin: 0 auto; }
+        .nav-links { text-align: center; margin-bottom: 30px; }
+        .nav-links a { color: #007acc; text-decoration: none; padding: 8px 16px; margin: 0 8px; border: 1px solid #007acc; border-radius: 4px; transition: all 0.2s; display: inline-block; }
+        .nav-links a:hover { background-color: #007acc; color: white; }
+        .nav-links a.active { background-color: #007acc; color: white; }
+        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #333; padding-bottom: 14px; }
+        .title { font-size: 1.4em; color: #ddd; font-weight: normal; }
+        .refresh-info { font-size: 12px; color: #666; }
+        .section-title { font-size: 1.1em; color: #ccc; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #333; }
+        .section-title .count { color: #26a69a; font-weight: 700; margin-left: 8px; }
+        .filter-bar { display: flex; gap: 12px; align-items: center; background: #2a2a2a; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; flex-wrap: wrap; }
+        .filter-group { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #aaa; }
+        .filter-group select, .filter-group input { background: #1a1a1a; border: 1px solid #444; color: #ddd; padding: 4px 8px; border-radius: 3px; font-size: 13px; }
+        table { width: 100%; border-collapse: collapse; background: #252525; border-radius: 8px; overflow: hidden; font-size: 13px; }
+        th, td { padding: 9px 10px; text-align: right; border-bottom: 1px solid #2e2e2e; }
+        th { background: #2f2f2f; color: #999; font-weight: 600; font-size: 12px; position: sticky; top: 0; z-index: 1; user-select: none; }
+        th.sortable { cursor: pointer; }
+        th.sortable:hover { color: #ccc; }
+        th.sorted { color: #007acc; }
+        th:first-child, td:first-child { text-align: center; width: 36px; color: #555; }
+        th:nth-child(2), td:nth-child(2) { text-align: left; }
+        tr:last-child td { border-bottom: none; }
+        tr.data-row:hover { background: #2a2a2a; }
+        .symbol { font-weight: 600; color: #fff; }
+        .ratio-val { color: #26a69a; font-weight: 700; }
+        .ratio-inf { color: #ff7b72; font-weight: 800; }        /* surge_ratio = ∞ */
+        .rate-val { color: #9aa; }
+        .chg-up   { color: #26a69a; font-weight: 700; }
+        .chg-down { color: #f85149; font-weight: 700; }
+        .chg-flat { color: #777; }                               /* 平价换手 */
+        .flat-tag { font-size: 10px; color: #777; border: 1px solid #444; border-radius: 3px; padding: 0 4px; margin-left: 4px; }
+        .time-cell { color: #666; font-size: 12px; white-space: nowrap; }
+        .empty { text-align: center; padding: 30px; color: #555; font-size: 13px; }
+        .no-alert { text-align: center; padding: 20px; color: #26a69a; font-size: 14px; }
+        .loading { text-align: center; padding: 40px; color: #666; }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <div class="nav-links">
+        <a href="/alerts">价格提醒</a>
+        <a href="/volume-alerts">放量提醒</a>
+        <a href="/volume-surge">放量监控</a>
+        <a href="/volume-surge-alerts" class="active">放量引爆</a>
+        <a href="/hills">山丘形态</a>
+        <a href="/ranking">涨跌排名</a>
+        <a href="/l2-alerts">L2大单</a>
+        <a href="/crossed-market">倒挂监控</a>
+        <a href="/bid-thick-alerts">买盘厚度</a>
+        <a href="/screener">选股器</a>
+        <a href="/boundary-alerts">边界预警</a>
+        <a href="/active-trading">活跃主买</a>
+        <a href="/abnormal-trades">异常成交</a>
+    </div>
+
+    <div class="header-bar">
+        <h1 class="title">Volume Surge 放量引爆监控</h1>
+        <span class="refresh-info">每 1s 刷新 · 时间为检测机本地时间</span>
+    </div>
+
+    <div class="filter-bar">
+        <div class="filter-group">
+            <label>代码</label>
+            <input type="text" id="filter-symbol" placeholder="如 KATMR" style="width:120px">
+        </div>
+        <div class="filter-group">
+            <label>时间范围</label>
+            <select id="filter-range">
+                <option value="today">今日</option>
+                <option value="1">近1小时</option>
+                <option value="6">近6小时</option>
+                <option value="24" selected>近24小时</option>
+                <option value="168">近7天</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>最小倍数</label>
+            <input type="number" id="filter-min-ratio" placeholder="如 5" style="width:70px" min="0" step="0.5">
+        </div>
+        <div class="filter-group">
+            <label>最小爆发量</label>
+            <input type="number" id="filter-min-burst" placeholder="如 100000" style="width:100px" min="0" step="1000">
+        </div>
+    </div>
+
+    <h2 class="section-title">💥 放量引爆 <span class="count" id="alert-count"></span></h2>
+    <div id="alert-content"><div class="loading">加载中...</div></div>
+
+</div>
+
+<script>
+    let alertData = [];
+    let sortCol = 'trigger_time';
+    let sortDir = 'desc';
+
+    const SORTABLE = ['surge_ratio', 'burst_vol', 'burst_trades', 'price_chg', 'trigger_time'];
+    const FLAT_THRESHOLD = 0.05;   // |price_chg| < 0.05% 视为平价换手
+
+    function getSymbol()   { return document.getElementById('filter-symbol').value.trim().toUpperCase(); }
+    function getRange()    { return document.getElementById('filter-range').value; }
+    function getMinRatio() { return document.getElementById('filter-min-ratio').value.trim(); }
+    function getMinBurst() { return document.getElementById('filter-min-burst').value.trim(); }
+
+    function fmtPrice(v) { return v == null ? '—' : Number(v).toFixed(4); }
+    function fmtVol(v)   { if (v == null) return '—'; v = Number(v); return isNaN(v) ? '—' : Math.round(v).toLocaleString(); }
+    function fmtRate(v)  { return v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 }); }
+
+    // surge_ratio: NULL = ∞ = 最强
+    function fmtRatioHtml(v) {
+        if (v == null) return '<span class="ratio-inf">∞</span>';
+        return '<span class="ratio-val">' + Number(v).toFixed(2) + '×</span>';
+    }
+
+    // price_chg: 拉升 / 下砸 / 平价换手
+    function fmtChgHtml(v) {
+        if (v == null) return '—';
+        const n = Number(v);
+        const txt = (n > 0 ? '+' : '') + n.toFixed(2) + '%';
+        if (Math.abs(n) < FLAT_THRESHOLD) return '<span class="chg-flat">' + txt + '</span><span class="flat-tag">平价</span>';
+        return '<span class="' + (n > 0 ? 'chg-up' : 'chg-down') + '">' + txt + '</span>';
+    }
+
+    // trigger_time 是后端 to_char 出的本地字符串，直接显示，不做时区换算
+    function fmtTime(s) { return s ? String(s).replace('T', ' ') : '—'; }
+
+    function buildUrl() {
+        let url = '/api/volume-surge-alerts?limit=300';
+        const range = getRange();
+        if (range === 'today') url += '&range=today';
+        else url += '&hours=' + range;
+        url += '&sort=' + sortCol + '&order=' + sortDir;
+        const symbol = getSymbol();  if (symbol) url += '&symbol=' + encodeURIComponent(symbol);
+        const mr = getMinRatio();    if (mr) url += '&min_surge_ratio=' + mr;
+        const mb = getMinBurst();    if (mb) url += '&min_burst_vol=' + mb;
+        return url;
+    }
+
+    async function fetchAlerts() {
+        try {
+            const res = await fetch(buildUrl(), { cache: 'no-store' });
+            alertData = await res.json();
+            render();
+        } catch (e) { console.error('fetchAlerts:', e); }
+    }
+
+    function render() {
+        const el = document.getElementById('alert-content');
+        document.getElementById('alert-count').textContent = alertData.length > 0 ? alertData.length + ' 条' : '';
+        if (!alertData.length) { el.innerHTML = '<div class="no-alert">✓ 当前范围内无放量引爆记录</div>'; return; }
+
+        const thIcon = col => sortCol !== col ? '<span style="color:#444">↕</span>' : (sortDir === 'desc' ? '↓' : '↑');
+        const thCls  = col => 'sortable' + (sortCol === col ? ' sorted' : '');
+
+        let html = `<table><thead><tr>
+            <th></th><th>Symbol</th>
+            <th class="${thCls('surge_ratio')}" onclick="sortBy('surge_ratio')">倍数 ${thIcon('surge_ratio')}</th>
+            <th>爆发速率</th><th>缩量速率</th>
+            <th class="${thCls('burst_vol')}" onclick="sortBy('burst_vol')">爆发量 ${thIcon('burst_vol')}</th>
+            <th class="${thCls('burst_trades')}" onclick="sortBy('burst_trades')">笔数 ${thIcon('burst_trades')}</th>
+            <th>缩量量</th><th>首价</th><th>末价</th><th>最高</th><th>最低</th>
+            <th class="${thCls('price_chg')}" onclick="sortBy('price_chg')">涨跌幅 ${thIcon('price_chg')}</th>
+            <th class="${thCls('trigger_time')}" onclick="sortBy('trigger_time')">触发时间 ${thIcon('trigger_time')}</th>
+            <th>#</th>
+        </tr></thead><tbody>`;
+
+        alertData.forEach((r, i) => {
+            html += `<tr class="data-row">
+                <td>${i + 1}</td>
+                <td><span class="symbol">${r.symbol}</span></td>
+                <td>${fmtRatioHtml(r.surge_ratio)}</td>
+                <td><span class="rate-val">${fmtRate(r.burst_rate)}</span></td>
+                <td><span class="rate-val">${fmtRate(r.quiet_rate)}</span></td>
+                <td>${fmtVol(r.burst_vol)}</td>
+                <td>${r.burst_trades ?? '—'}</td>
+                <td>${fmtVol(r.quiet_vol)}</td>
+                <td>${fmtPrice(r.price_first)}</td>
+                <td>${fmtPrice(r.price_last)}</td>
+                <td>${fmtPrice(r.price_high)}</td>
+                <td>${fmtPrice(r.price_low)}</td>
+                <td>${fmtChgHtml(r.price_chg)}</td>
+                <td class="time-cell">${fmtTime(r.trigger_time)}</td>
+                <td>${i + 1}</td>
+            </tr>`;
+        });
+        html += '</tbody></table>';
+        el.innerHTML = html;
+    }
+
+    function sortBy(col) {
+        if (!SORTABLE.includes(col)) return;
+        sortDir = sortCol === col ? (sortDir === 'desc' ? 'asc' : 'desc') : 'desc';
+        sortCol = col;
+        fetchAlerts();
+    }
+
+    // 事件绑定
+    document.getElementById('filter-symbol').addEventListener('input', fetchAlerts);
+    document.getElementById('filter-range').addEventListener('change', fetchAlerts);
+    document.getElementById('filter-min-ratio').addEventListener('input', fetchAlerts);
+    document.getElementById('filter-min-burst').addEventListener('input', fetchAlerts);
+
+    // 启动
+    fetchAlerts();
+    setInterval(fetchAlerts, 1000);
+</script>
+    <script src="/js/open-stock.js" defer></script>
+</body>
+</html>
