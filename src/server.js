@@ -4928,6 +4928,78 @@ app.get('/api/bid-thick-alerts', async (req, res) => {
   }
 });
 
+// === Volume Surge Alert API (放量引爆告警,只读) ===
+app.get('/api/volume-surge-alerts', async (req, res) => {
+  try {
+    const symbol = (req.query.symbol || '').trim().toUpperCase();
+    const range  = req.query.range || '';               // 'today' 时按本地当日
+    const hours  = parseInt(req.query.hours) || 24;
+    const limit  = Math.min(parseInt(req.query.limit) || 200, 500);
+    const sort   = ['surge_ratio', 'burst_vol', 'burst_trades', 'price_chg', 'trigger_time'].includes(req.query.sort)
+      ? req.query.sort : 'trigger_time';
+    const order  = req.query.order === 'asc' ? 'ASC' : 'DESC';
+    const nulls  = order === 'DESC' ? 'FIRST' : 'LAST';  // surge_ratio NULL = 无穷大 = 最强
+
+    const conditions = [];
+    const params = [];
+    let paramIdx = 0;
+
+    // 时间范围（naive-local 口径，切勿用 NOW()/UTC）
+    if (range === 'today') {
+      conditions.push(`trigger_time >= date_trunc('day', LOCALTIMESTAMP)`);
+    } else {
+      paramIdx++;
+      conditions.push(`trigger_time > LOCALTIMESTAMP - interval '1 hour' * $${paramIdx}`);
+      params.push(hours);
+    }
+
+    // symbol 过滤
+    if (symbol) {
+      paramIdx++;
+      conditions.push(`symbol ILIKE $${paramIdx}`);
+      params.push(`%${symbol}%`);
+    }
+
+    // 最小 surge_ratio（NULL 视为无穷大，必须通过任何阈值）
+    const minRatio = parseFloat(req.query.min_surge_ratio);
+    if (!isNaN(minRatio) && minRatio > 0) {
+      paramIdx++;
+      conditions.push(`(surge_ratio >= $${paramIdx} OR surge_ratio IS NULL)`);
+      params.push(minRatio);
+    }
+
+    // 最小 burst_vol
+    const minBurstVol = parseFloat(req.query.min_burst_vol);
+    if (!isNaN(minBurstVol) && minBurstVol > 0) {
+      paramIdx++;
+      conditions.push(`burst_vol >= $${paramIdx}`);
+      params.push(minBurstVol);
+    }
+
+    const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+
+    paramIdx++;
+    const sql = `
+      SELECT id, symbol,
+             to_char(trigger_time, 'YYYY-MM-DD HH24:MI:SS') AS trigger_time,
+             burst_vol, burst_trades, quiet_vol,
+             burst_rate, quiet_rate, surge_ratio,
+             price_first, price_last, price_high, price_low, price_chg
+      FROM market_data.volume_surge_alerts
+      ${where}
+      ORDER BY ${sort} ${order} NULLS ${nulls}, id DESC
+      LIMIT $${paramIdx}
+    `;
+    params.push(limit);
+
+    const result = await pool.query(sql, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('[volume-surge-alerts] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 静态文件服务
 app.use(express.static(path.join(__dirname, '../public'), {
     setHeaders: (res) => {
