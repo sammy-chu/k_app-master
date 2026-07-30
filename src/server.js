@@ -5149,6 +5149,7 @@ app.get('/crossed-market',      (req, res) => res.sendFile(path.join(__dirname, 
 app.get('/bid-thick-alerts',    (req, res) => res.sendFile(path.join(__dirname, '../public/bid-thick-alerts.html')));
 app.get('/volume-surge-alerts', (req, res) => res.sendFile(path.join(__dirname, '../public/volume-surge-alerts.html')));
 app.get('/rect-alerts',         (req, res) => res.sendFile(path.join(__dirname, '../public/rect-alerts.html')));
+app.get('/tr-alerts',           (req, res) => res.sendFile(path.join(__dirname, '../public/tr-alerts.html')));
 
 // [PERF] ensureTables 默认跳过（仅 ENSURE_TABLES=1 时执行 DDL），不阻塞 startAlertMonitor
 ensureTables().then(() => {
