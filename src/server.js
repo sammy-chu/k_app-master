@@ -7,6 +7,31 @@ const { getFlexibleHills } = require('./scan-flexible-hills');
 const ConfigManager = require('./config-manager');
 
 // ══════════════════════════════════════════════════════════════
+// [TR-ALERTS] 读用 Redis 客户端（SCAN + HGETALL 读取 ppro8:tralert:*）
+// 与 rect:events 订阅 client 隔离，连接失败不阻塞进程
+// ══════════════════════════════════════════════════════════════
+const { createClient: createTrRedisClient } = require('redis');
+let trRedisReady = false;
+const trRedis = createTrRedisClient({
+  url: `redis://${process.env.REDIS_HOST || '127.0.0.1'}:${process.env.REDIS_PORT || '6379'}`,
+});
+trRedis.on('error', (err) => {
+  trRedisReady = false;
+  console.error('[TrAlertRedis] Error:', err.message);
+});
+trRedis.on('ready', () => {
+  trRedisReady = true;
+  console.log('[TrAlertRedis] connected & ready');
+});
+(async () => {
+  try {
+    await trRedis.connect();
+  } catch (err) {
+    console.error('[TrAlertRedis] Failed to connect (non-fatal):', err.message);
+  }
+})();
+
+// ══════════════════════════════════════════════════════════════
 // [TRADES] 统一读取表名常量 — 回滚只改这一行
 // ══════════════════════════════════════════════════════════════
 const TRADES_TABLE = 'market_data.tos_trades_bl';
