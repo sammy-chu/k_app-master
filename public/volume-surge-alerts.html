@@ -91,6 +91,18 @@
             <label>最小爆发量</label>
             <input type="number" id="filter-min-burst" placeholder="如 100000" style="width:100px" min="0" step="1000">
         </div>
+        <div class="filter-group">
+            <label>末价</label>
+            <input type="number" id="filter-min-price" placeholder="最小价" style="width:80px" min="0" step="0.01">
+            <span style="color:#555">~</span>
+            <input type="number" id="filter-max-price" placeholder="最大价" style="width:80px" min="0" step="0.01">
+        </div>
+        <div class="filter-group">
+            <label>涨跌幅%</label>
+            <input type="number" id="filter-min-chg" placeholder="最小%" style="width:70px" step="0.5">
+            <span style="color:#555">~</span>
+            <input type="number" id="filter-max-chg" placeholder="最大%" style="width:70px" step="0.5">
+        </div>
     </div>
 
     <h2 class="section-title">💥 放量引爆 <span class="count" id="alert-count"></span></h2>
@@ -110,6 +122,10 @@
     function getRange()    { return document.getElementById('filter-range').value; }
     function getMinRatio() { return document.getElementById('filter-min-ratio').value.trim(); }
     function getMinBurst() { return document.getElementById('filter-min-burst').value.trim(); }
+    function getMinPrice() { const v = parseFloat(document.getElementById('filter-min-price').value); return isNaN(v) ? null : v; }
+    function getMaxPrice() { const v = parseFloat(document.getElementById('filter-max-price').value); return isNaN(v) ? null : v; }
+    function getMinChg()   { const v = parseFloat(document.getElementById('filter-min-chg').value);   return isNaN(v) ? null : v; }
+    function getMaxChg()   { const v = parseFloat(document.getElementById('filter-max-chg').value);   return isNaN(v) ? null : v; }
 
     function fmtPrice(v) { return v == null ? '—' : Number(v).toFixed(4); }
     function fmtVol(v)   { if (v == null) return '—'; v = Number(v); return isNaN(v) ? '—' : Math.round(v).toLocaleString(); }
@@ -153,10 +169,35 @@
         } catch (e) { console.error('fetchAlerts:', e); }
     }
 
+    // 纯前端过滤：末价区间 + 涨跌幅区间。某端未填则不限制；筛选启用而字段为 null 则排除该行。
+    function applyClientFilters(rows) {
+        const minP = getMinPrice(), maxP = getMaxPrice();
+        const minC = getMinChg(),   maxC = getMaxChg();
+        const priceOn = minP !== null || maxP !== null;
+        const chgOn   = minC !== null || maxC !== null;
+        if (!priceOn && !chgOn) return rows;
+        return rows.filter(r => {
+            if (priceOn) {
+                if (r.price_last == null) return false;
+                const pv = Number(r.price_last);
+                if (minP !== null && pv < minP) return false;
+                if (maxP !== null && pv > maxP) return false;
+            }
+            if (chgOn) {
+                if (r.price_chg == null) return false;
+                const cv = Number(r.price_chg);
+                if (minC !== null && cv < minC) return false;
+                if (maxC !== null && cv > maxC) return false;
+            }
+            return true;
+        });
+    }
+
     function render() {
         const el = document.getElementById('alert-content');
-        document.getElementById('alert-count').textContent = alertData.length > 0 ? alertData.length + ' 条' : '';
-        if (!alertData.length) { el.innerHTML = '<div class="no-alert">✓ 当前范围内无放量引爆记录</div>'; return; }
+        const viewData = applyClientFilters(alertData);
+        document.getElementById('alert-count').textContent = viewData.length > 0 ? viewData.length + ' 条' : '';
+        if (!viewData.length) { el.innerHTML = '<div class="no-alert">✓ 当前范围内无放量引爆记录</div>'; return; }
 
         const thIcon = col => sortCol !== col ? '<span style="color:#444">↕</span>' : (sortDir === 'desc' ? '↓' : '↑');
         const thCls  = col => 'sortable' + (sortCol === col ? ' sorted' : '');
@@ -173,7 +214,7 @@
             <th>#</th>
         </tr></thead><tbody>`;
 
-        alertData.forEach((r, i) => {
+        viewData.forEach((r, i) => {
             html += `<tr class="data-row">
                 <td>${i + 1}</td>
                 <td><span class="symbol">${r.symbol}</span></td>
@@ -208,6 +249,8 @@
     document.getElementById('filter-range').addEventListener('change', fetchAlerts);
     document.getElementById('filter-min-ratio').addEventListener('input', fetchAlerts);
     document.getElementById('filter-min-burst').addEventListener('input', fetchAlerts);
+    ['filter-min-price', 'filter-max-price', 'filter-min-chg', 'filter-max-chg'].forEach(id => 
+        document.getElementById(id).addEventListener('input', render));
 
     // 启动
     fetchAlerts();
