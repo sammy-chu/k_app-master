@@ -5048,6 +5048,9 @@ app.get('/api/tr-alerts/active', async (req, res) => {
     const toBool = (v) => v === 'True';
     const toNum  = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
 
+    const rkMapTr = new Map();
+    for (const row of rankingCacheTr) rkMapTr.set(row.symbol, row);
+
     const alerts = [];
     for (const key of keys) {
       const h = await trRedis.hGetAll(key);
@@ -5080,6 +5083,17 @@ app.get('/api/tr-alerts/active', async (req, res) => {
         if (cp !== null && cp !== 0) is_up = cp > 0;
       }
 
+      // ── 内存 enrich：价格/交易量/涨跌额（rankingCacheTr 优先，回退 Redis+推导）──
+      const rk = rkMapTr.get(h.symbol || '');
+      const priceRedis = toNum(h.last_price);
+      const price      = rk ? Number(rk.last_price) : priceRedis;
+      const changePct  = rk ? Number(rk.change_pct) : toNum(h.change_pct);
+      let   changeAmt  = rk ? Number(rk.change_amount) : null;
+      if (changeAmt == null && price != null && changePct != null && (100 + changePct) !== 0) {
+        changeAmt = Number((price * changePct / (100 + changePct)).toFixed(4));
+      }
+      const totalVolume = rk ? Number(rk.total_volume) : null;
+
       alerts.push({
         redis_key:      key,
         symbol:         h.symbol || '',
@@ -5093,16 +5107,58 @@ app.get('/api/tr-alerts/active', async (req, res) => {
         render_style,
         is_up,
         direction:      dirRaw ?? '',
+        price,
+        total_volume:   totalVolume,
+        change_pct:     changePct,
+        change_amount:  changeAmt,
+        bid10_vol:      null,   // 占位，Step 第二遍填
+        ask10_vol:      null,
+        bid_ask_ratio:  null,
+        // 其他字段保留以防以后用到，本期前端可能不显示
         last_price:     toNum(h.last_price),
-        change_pct:     toNum(h.change_pct),
         win_change_pct: toNum(h.win_change_pct),
-        bid12_vol:      toNum(h.bid12_vol),
-        ask10_vol:      toNum(h.ask10_vol),
         win_volume:     toNum(h.win_volume),
         period_vol:     toNum(h.period_vol),
         base_avg_vol:   toNum(h.base_avg_vol),
         surge_ratio:    toNum(h.surge_ratio),
       });
+    }
+
+    // ── L2 enrich：买10/卖10（一条分组查询，仅当前告警股）──
+    if (alerts.length > 0) {
+      const symbols = [...new Set(alerts.map(a => a.symbol).filter(Boolean))];
+      try {
+        const { rows: l2rows } = await pool.query(`
+          WITH latest AS (
+            SELECT symbol, MAX(snapshot_at) AS ts
+            FROM market_data.l2_order_book_tr
+            WHERE symbol = ANY($1::text[])
+              AND snapshot_at >= NOW() - INTERVAL '30 seconds'
+            GROUP BY symbol
+          )
+          SELECT b.symbol,
+                 SUM(b.volume) FILTER (WHERE b.side='bid' AND b.level<=10) AS bid10_vol,
+                 SUM(b.volume) FILTER (WHERE b.side='ask' AND b.level<=10) AS ask10_vol
+          FROM market_data.l2_order_book_tr b
+          JOIN latest l ON b.symbol = l.symbol AND b.snapshot_at = l.ts
+          GROUP BY b.symbol
+        `, [symbols]);
+
+        const l2Map = new Map();
+        for (const r of l2rows) l2Map.set(r.symbol, r);
+
+        for (const a of alerts) {
+          const l2 = l2Map.get(a.symbol);
+          if (!l2) continue;
+          a.bid10_vol = l2.bid10_vol != null ? Number(l2.bid10_vol) : null;
+          a.ask10_vol = l2.ask10_vol != null ? Number(l2.ask10_vol) : null;
+          a.bid_ask_ratio = (a.bid10_vol != null && a.ask10_vol > 0)
+            ? Number((a.bid10_vol / a.ask10_vol).toFixed(2)) : null;
+        }
+      } catch (e) {
+        console.error('[tr-alerts/active] l2 enrich failed:', e.message);
+        // 失败不致命：bid_ask_ratio 保持 null，前端显示 —
+      }
     }
 
     // ── 置顶排序：永久置顶恒最上；其次 pin_until 倒序（近的在前）──
