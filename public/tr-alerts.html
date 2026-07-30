@@ -92,10 +92,58 @@
         } catch(e){ console.error('fetchAlerts:', e); }
     }
 
+    function rowClass(r){
+        switch(r.render_style){
+            case 'pin_permanent': return 'row-pin-permanent';
+            case 'flash_yellow':  return 'row-flash-yellow';
+            case 'bg_yellow':     return 'row-bg-yellow';
+            case 'flash_dir':     return r.is_up === false ? 'row-flash-red' : 'row-flash-green'; // 涨绿跌红
+            default:              return '';   // 大单托盘：仅图标，无背景
+        }
+    }
+
+    function iconFor(style){
+        switch(style){
+            case 'pin_permanent': return '📌🔴';   // 永久置顶醒目
+            case 'flash_dir':     return '⚡';
+            case 'flash_yellow':  return '💥';
+            case 'bg_yellow':     return '🟡';
+            default:              return '•';       // 大单托盘 仅图标
+        }
+    }
+
     function render(){
-        // Step 4/5 填充
         const el = document.getElementById('alert-content');
-        el.innerHTML = '<div class="no-alert">✓ 当前无生效预警</div>';
+        document.getElementById('alert-count').textContent = alertData.length ? alertData.length + ' 条' : '';
+        if (!alertData.length){ el.innerHTML = '<div class="no-alert">✓ 当前无生效预警</div>'; return; }
+
+        let html = `<table><thead><tr>
+            <th>类型</th><th>代码</th><th>预警</th><th>现价</th><th>涨跌幅</th>
+            <th>窗口涨跌%</th><th>买1+2量</th><th>卖1-10量</th>
+            <th>窗口量</th><th>周期量</th><th>基准均量</th><th>放量倍数</th>
+            <th>置顶到期</th>
+        </tr></thead><tbody>`;
+
+        alertData.forEach(r => {
+            const dirCls = r.is_up === true ? 'up' : (r.is_up === false ? 'down' : '');
+            html += `<tr class="${rowClass(r)}" data-key="${r.redis_key}">
+                <td><span class="icon">${iconFor(r.render_style)}</span></td>
+                <td><span class="symbol">${r.symbol}</span></td>
+                <td>${r.alert_name || r.alert_type}</td>
+                <td class="${dirCls}">${fmtPrice(r.last_price)}</td>
+                <td class="${dirCls}">${fmtPct(r.change_pct)}</td>
+                <td class="${dirCls}">${fmtPct(r.win_change_pct)}</td>
+                <td>${fmtNum(r.bid12_vol)}</td>
+                <td>${fmtNum(r.ask10_vol)}</td>
+                <td>${fmtNum(r.win_volume)}</td>
+                <td>${fmtNum(r.period_vol)}</td>
+                <td>${fmtNum(r.base_avg_vol)}</td>
+                <td>${r.surge_ratio==null ? '—' : Number(r.surge_ratio).toFixed(2)+'×'}</td>
+                <td>${fmtTime(r.pin_until)}</td>
+            </tr>`;
+        });
+        html += '</tbody></table>';
+        el.innerHTML = html;
     }
 
     fetchAlerts();
