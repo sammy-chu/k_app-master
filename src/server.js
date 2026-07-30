@@ -7,6 +7,31 @@ const { getFlexibleHills } = require('./scan-flexible-hills');
 const ConfigManager = require('./config-manager');
 
 // ══════════════════════════════════════════════════════════════
+// [TR-ALERTS] 读用 Redis 客户端（SCAN + HGETALL 读取 ppro8:tralert:*）
+// 与 rect:events 订阅 client 隔离，连接失败不阻塞进程
+// ══════════════════════════════════════════════════════════════
+const { createClient: createTrRedisClient } = require('redis');
+let trRedisReady = false;
+const trRedis = createTrRedisClient({
+  url: `redis://${process.env.REDIS_HOST || '127.0.0.1'}:${process.env.REDIS_PORT || '6379'}`,
+});
+trRedis.on('error', (err) => {
+  trRedisReady = false;
+  console.error('[TrAlertRedis] Error:', err.message);
+});
+trRedis.on('ready', () => {
+  trRedisReady = true;
+  console.log('[TrAlertRedis] connected & ready');
+});
+(async () => {
+  try {
+    await trRedis.connect();
+  } catch (err) {
+    console.error('[TrAlertRedis] Failed to connect (non-fatal):', err.message);
+  }
+})();
+
+// ══════════════════════════════════════════════════════════════
 // [TRADES] 统一读取表名常量 — 回滚只改这一行
 // ══════════════════════════════════════════════════════════════
 const TRADES_TABLE = 'market_data.tos_trades_bl';
@@ -5000,6 +5025,99 @@ app.get('/api/volume-surge-alerts', async (req, res) => {
   }
 });
 
+// === TR 五大预警实时态 API（只读 Redis，当前生效）===
+// 数据源：ppro8:tralert:{alert_type}:{symbol}（Hash，带 TTL，过期自动消失）
+// 后端做：类型转换 + render_style 计算 + 置顶排序；client 未就绪返回空数组
+app.get('/api/tr-alerts/active', async (req, res) => {
+  try {
+    if (!trRedisReady) {
+      return res.json({ count: 0, alerts: [], redis_ready: false });
+    }
+
+    // ── SCAN 收集所有 key（游标循环，稳定跨版本）──
+    const keys = [];
+    let cursor = '0';
+    do {
+      // node-redis v4+：scan(cursor, { MATCH, COUNT }) → { cursor, keys }
+      const reply = await trRedis.scan(cursor, { MATCH: 'ppro8:tralert:*', COUNT: 500 });
+      cursor = String(reply.cursor);
+      if (reply.keys && reply.keys.length) keys.push(...reply.keys);
+    } while (cursor !== '0');
+
+    // ── 逐个 HGETALL（key 可能在此间过期 → 返回空对象，跳过）──
+    const toBool = (v) => v === 'True';
+    const toNum  = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
+
+    const alerts = [];
+    for (const key of keys) {
+      const h = await trRedis.hGetAll(key);
+      if (!h || Object.keys(h).length === 0) continue;
+
+      const pin_permanent = toBool(h.pin_permanent);
+      const flash         = toBool(h.flash);
+      const flash_color   = h.flash_color || '';   // red|green|yellow|''（仅判是否方向闪，不直接上色）
+      const bg_color      = h.bg_color || '';       // yellow|''
+
+      // render_style：字段驱动，前端据此决定样式（不按预警编号）
+      let render_style;
+      if (pin_permanent)                                          render_style = 'pin_permanent'; // 预警1
+      else if (flash && bg_color === 'yellow')                    render_style = 'flash_yellow';  // 预警4
+      else if (flash && (flash_color === 'red' || flash_color === 'green')) render_style = 'flash_dir'; // 预警2
+      else if (bg_color === 'yellow')                             render_style = 'bg_yellow';     // 预警5
+      else                                                        render_style = 'icon';          // 预警3
+
+      // direction：兼容 'up'/'down' 或 +1/-1/数值，统一给前端一个 is_up（涨绿跌红用）
+      let is_up = null;
+      const dirRaw = h.direction;
+      if (dirRaw !== undefined && dirRaw !== '' && dirRaw !== null) {
+        if (/^-?\d+(\.\d+)?$/.test(String(dirRaw))) is_up = Number(dirRaw) > 0;
+        else if (String(dirRaw).toLowerCase() === 'up')   is_up = true;
+        else if (String(dirRaw).toLowerCase() === 'down') is_up = false;
+      }
+      // 兜底：direction 缺失时用 change_pct 符号
+      if (is_up === null) {
+        const cp = toNum(h.change_pct);
+        if (cp !== null && cp !== 0) is_up = cp > 0;
+      }
+
+      alerts.push({
+        redis_key:      key,
+        symbol:         h.symbol || '',
+        alert_type:     h.alert_type || '',
+        alert_name:     h.alert_name || '',
+        pin_permanent,
+        pin_until:      h.pin_until || '',   // 本地时间字符串，仅排序/显示
+        flash,
+        flash_color,
+        bg_color,
+        render_style,
+        is_up,
+        direction:      dirRaw ?? '',
+        last_price:     toNum(h.last_price),
+        change_pct:     toNum(h.change_pct),
+        win_change_pct: toNum(h.win_change_pct),
+        bid12_vol:      toNum(h.bid12_vol),
+        ask10_vol:      toNum(h.ask10_vol),
+        win_volume:     toNum(h.win_volume),
+        period_vol:     toNum(h.period_vol),
+        base_avg_vol:   toNum(h.base_avg_vol),
+        surge_ratio:    toNum(h.surge_ratio),
+      });
+    }
+
+    // ── 置顶排序：永久置顶恒最上；其次 pin_until 倒序（近的在前）──
+    alerts.sort((a, b) => {
+      if (a.pin_permanent !== b.pin_permanent) return a.pin_permanent ? -1 : 1;
+      return String(b.pin_until).localeCompare(String(a.pin_until));
+    });
+
+    res.json({ count: alerts.length, alerts, redis_ready: true });
+  } catch (e) {
+    console.error('[tr-alerts/active] Error:', e.message);
+    res.json({ count: 0, alerts: [], redis_ready: trRedisReady, error: e.message });
+  }
+});
+
 // 静态文件服务
 app.use(express.static(path.join(__dirname, '../public'), {
     setHeaders: (res) => {
@@ -5031,6 +5149,7 @@ app.get('/crossed-market',      (req, res) => res.sendFile(path.join(__dirname, 
 app.get('/bid-thick-alerts',    (req, res) => res.sendFile(path.join(__dirname, '../public/bid-thick-alerts.html')));
 app.get('/volume-surge-alerts', (req, res) => res.sendFile(path.join(__dirname, '../public/volume-surge-alerts.html')));
 app.get('/rect-alerts',         (req, res) => res.sendFile(path.join(__dirname, '../public/rect-alerts.html')));
+app.get('/tr-alerts',           (req, res) => res.sendFile(path.join(__dirname, '../public/tr-alerts.html')));
 
 // [PERF] ensureTables 默认跳过（仅 ENSURE_TABLES=1 时执行 DDL），不阻塞 startAlertMonitor
 ensureTables().then(() => {
