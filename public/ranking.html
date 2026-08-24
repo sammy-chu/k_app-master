@@ -124,8 +124,10 @@
             <button class="btn-toggle-filters" id="btn-toggle-filters" onclick="toggleFilters()">▾ 筛选</button>
             <div class="filters">
                 <div class="filter-item">
-                    <label>最小成交量</label>
-                    <input type="number" id="min-volume" class="filter-input" value="0" oninput="debounceFetch()">
+                    <label>成交量</label>
+                    <input type="number" id="min-volume" class="filter-input" value="0" placeholder="最小" oninput="debounceFetch()">
+                    <span style="color:#555">~</span>
+                    <input type="number" id="max-volume" class="filter-input" value="" placeholder="最大" oninput="renderTable()">
                 </div>
                 <div class="filter-item">
                     <label>2分钟波动</label>
@@ -228,8 +230,8 @@
 
     // ── 排名指标切换：'day' = 今日涨跌，'30m' = 近30分钟涨跌 ──
     let rankMode = 'day';
-    const FILTER_IDS = ['min-volume','min-2m-change','min-price','max-price','min-change-amt','max-change-amt','filter-5pct'];
-    const FILTER_QUERY_KEYS = ['min_volume','min_2m_change','min_price','max_price','min_change_amt','max_change_amt','filter_5pct','rank_mode'];
+    const FILTER_IDS = ['min-volume','max-volume','min-2m-change','min-price','max-price','min-change-amt','max-change-amt','filter-5pct'];
+    const FILTER_QUERY_KEYS = ['min_volume','max_volume','min_2m_change','min_price','max_price','min_change_amt','max_change_amt','filter_5pct','rank_mode'];
     const NAV_STATE_KEY = 'rememberedFilterUrls';
     const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/oscillator-screener','/abnormal-trades']);
 
@@ -577,6 +579,7 @@
         const filter5Pct  = document.getElementById('filter-5pct').checked;
         const minChgAmt   = parseFloat(document.getElementById('min-change-amt').value);
         const maxChgAmt   = parseFloat(document.getElementById('max-change-amt').value);
+        const maxVolume   = parseFloat(document.getElementById('max-volume').value);
 
         // ★ 白名单过滤
         const whitelistedData = Whitelist.filter(currentData);
@@ -588,6 +591,8 @@
 
             // 过滤成交量为0的股票
             if (!vol || vol <= 0) return false;
+
+            if (!isNaN(maxVolume) && vol > maxVolume) return false;
 
             if (p < minPrice || p > maxPrice) return false;
             if (filter5Pct && pct <= 5) return false;
