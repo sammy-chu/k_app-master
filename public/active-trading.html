@@ -454,7 +454,7 @@
 
   <!-- 跨股冰山联动 --> 
   <div id="cross-iceberg-section"> 
-    <div class="cross-ice-header"> 
+    <div class="cross-ice-header" title="点击折叠/展开" onclick="toggleCrossIce()"> 
       <span class="dot"></span> 
       <span>跨股冰山联动</span>
       <span class="cross-ice-chevron">▼</span> 
@@ -678,6 +678,13 @@ function renderCrossIceberg(grouped) {
   } 
   tbody.innerHTML = html; 
 } 
+
+// ── 跨股冰山联动：折叠/展开 ──
+let crossIceCollapsed = false;
+function toggleCrossIce() {
+  crossIceCollapsed = !crossIceCollapsed;
+  document.getElementById('cross-iceberg-section').classList.toggle('collapsed', crossIceCollapsed);
+}
 
 let isFetching = false;
 async function fetchData() {
