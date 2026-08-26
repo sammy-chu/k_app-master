@@ -340,6 +340,15 @@
   .cross-ice-table tr.cross-flash td { 
     animation: cross-ice-flash 1s infinite; 
   } 
+
+  /* ── 跨股冰山联动：折叠/展开 ── */ 
+  .cross-ice-header { cursor: pointer; user-select: none; } 
+  .cross-ice-chevron { 
+    margin-left: auto; font-size: 10px; color: #a57bbf; 
+    transition: transform 0.2s ease; 
+  } 
+  #cross-iceberg-section.collapsed .cross-ice-chevron { transform: rotate(-90deg); } 
+  #cross-iceberg-section.collapsed .cross-ice-table { display: none; } 
 </style>
 </head>
 <body>
@@ -447,7 +456,8 @@
   <div id="cross-iceberg-section"> 
     <div class="cross-ice-header"> 
       <span class="dot"></span> 
-      <span>跨股冰山联动</span> 
+      <span>跨股冰山联动</span>
+      <span class="cross-ice-chevron">▼</span> 
     </div> 
     <table class="cross-ice-table"> 
       <thead> 
