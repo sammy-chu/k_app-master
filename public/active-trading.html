@@ -96,6 +96,7 @@
   .btn:hover { border-color: #888; color: #fff; }
   .btn.primary { border-color: #007acc; color: #7ac0f0; background: #007acc18; }
   .btn.primary:hover { background: #007acc30; }
+  .btn.active { border-color: #e91e63; color: #f48fb1; background: #e91e6318; }
 
   /* ── 屏蔽管理按钮 ── */
   .block-btn {
@@ -448,6 +449,7 @@
       <span class="rule-tag">数据源：market_data.active_trading_symbols</span>
       <span class="rule-tag">预警条件：1分钟内成交次数 &gt; 3</span>
       <span class="rule-tag" style="border-color:#e91e6344;color:#e91e63;background:#e91e630a;">冰山捕捉：2秒内同股数连击 &gt; 3次</span>
+      <button class="btn" id="btn-ice-only" onclick="toggleIceOnly()">⚡ 只显示冰山</button>
     </div>
     <span id="count-info">—</span>
   </div>
