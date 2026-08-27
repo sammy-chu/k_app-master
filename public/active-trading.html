@@ -795,6 +795,9 @@ function applyFilter() {
   const spreadMax   = getV('spreadMax');
 
   const filtered = allData.filter(row => {
+    // 「只显示冰山」开启时，非冰山连击行全部隐藏（与其它筛选条件 AND 叠加）
+    if (iceOnly && !row._icebergPinned) return false;
+
     if (blockedStocks.includes(row.symbol)) return false;
 
     // 没有行情数据的股票直接过滤掉，不在列表中显示
@@ -892,6 +895,15 @@ function toggleFilter() {
   document.getElementById('filterChevron').classList.toggle('open', filterOpen);
 }
 
+// ── 冰山捕捉筛选：一键只显示冰山数据 ──
+let iceOnly = false;
+function toggleIceOnly() {
+  iceOnly = !iceOnly;
+  const btn = document.getElementById('btn-ice-only');
+  if (btn) btn.classList.toggle('active', iceOnly);
+  applyFilter();
+}
+
 // ── SORT ──────────────────────────────────────────────────────────────────
 function sortBy(key) {
   if (sortKey === key) sortDir *= -1;
@@ -909,7 +921,9 @@ function sortBy(key) {
 function renderTable() {
   const tbody = document.getElementById('tbody');
   if (sortedData.length === 0) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">暂无活跃成交股票</td></tr>`;
+    tbody.innerHTML = iceOnly
+      ? `<tr class="empty-row"><td colspan="9">暂无冰山捕捉数据</td></tr>`
+      : `<tr class="empty-row"><td colspan="9">暂无活跃成交股票</td></tr>`;
     return;
   }
   tbody.innerHTML = sortedData.map(buildRowHTML).join('');
