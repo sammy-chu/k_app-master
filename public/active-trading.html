@@ -474,7 +474,7 @@
   </div> 
 
   <!-- 主表格 -->
-  <table>
+  <table id="main-table">
     <thead>
       <tr>
         <th onclick="sortBy('symbol')">代码</th>
@@ -909,11 +909,11 @@ function toggleIceOnly() {
 function sortBy(key) {
   if (sortKey === key) sortDir *= -1;
   else { sortKey = key; sortDir = -1; }
-  document.querySelectorAll('thead th').forEach((th, i) => {
+  document.querySelectorAll('#main-table thead th').forEach((th) => {
     th.classList.remove('sort-asc', 'sort-desc');
   });
   const idx = ['symbol','last_price','change_pct','total_volume','avg_vol_3d','day_range','bid','spread','trade_count','first_detected_at'].indexOf(key);
-  const th = document.querySelectorAll('thead th')[idx];
+  const th = document.querySelectorAll('#main-table thead th')[idx];
   if (th) th.classList.add(sortDir === 1 ? 'sort-asc' : 'sort-desc');
   applyFilter();
 }
