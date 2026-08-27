@@ -1725,6 +1725,7 @@ app.get('/api/active-trading', async (req, res) => {
         has_market_data:    hasMarketData,
         last_price:         lastPrice,
         total_volume:       totalVolume,
+        avg_vol_3d:         avgVol3dCache.get(symbol) ?? null,
         high_price:         highPrice,
         low_price:          lowPrice,
         day_range:          dayRange,
