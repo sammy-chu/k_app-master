@@ -2460,6 +2460,41 @@ async function refreshDailyRangeCache() {
   }
 }
 
+// 3日均量缓存：symbol -> avg_vol_3d（全表最近3个历史交易日的日均成交量，每小时刷新）
+// 口径与 market-monitor-tr/src/server-tr.js 的 refreshAvgVol3dTr() 一致
+const avgVol3dCache = new Map();
+
+async function refreshAvgVol3dCache() {
+  const client = await pool.connect();
+  try {
+    await client.query('SET statement_timeout = 20000');
+    const { rows } = await client.query(`
+      WITH d AS (
+        SELECT DISTINCT trade_date
+        FROM market_data.daily_summary
+        WHERE trade_date < current_date
+        ORDER BY trade_date DESC
+        LIMIT 3
+      )
+      SELECT symbol, AVG(total_volume)::bigint AS avg_vol_3d
+      FROM market_data.daily_summary
+      WHERE trade_date IN (SELECT trade_date FROM d)
+        AND total_volume IS NOT NULL
+      GROUP BY symbol
+    `);
+    avgVol3dCache.clear();
+    for (const row of rows) {
+      avgVol3dCache.set(row.symbol, Number(row.avg_vol_3d));
+    }
+    console.log(`[AvgVol3d] refreshed, ${avgVol3dCache.size} symbols`);
+  } catch (err) {
+    console.error('[AvgVol3d] Error:', err.message);
+  } finally {
+    await client.query('SET statement_timeout = 0').catch(() => {});
+    client.release();
+  }
+}
+
 // === 当日分时成交量写入 daily_intraday_vol ===
 // period_vol 存当天从开盘到该分钟的累计成交量（单调递增）
 // 数据来源已改为 daily_summary.total_volume（PPro8 L1DB 全量，由 orderbook_processor_bl.py 写入）
@@ -4246,6 +4281,7 @@ function startAlertMonitor() {
     runScan('IntradayAvgVol', refreshIntradayAvgVolCache, 60000);
 
     runScan('DailyRangeCache', refreshDailyRangeCache, 60 * 60 * 1000);  // 启动立即执行，之后每小时刷新
+    runScan('AvgVol3d',        refreshAvgVol3dCache,   60 * 60 * 1000);  // 启动立即执行，之后每小时刷新
   }, 30000);
 
   // ── t=45s：IntradayVolWriter [DISABLED] ────────────────────────────────
