@@ -2496,6 +2496,67 @@ async function refreshAvgVol3dCache() {
   }
 }
 
+// ── 1分钟成交股数缓存 ─────────────────────────────────────────────────────
+// 口径：滚动最近60秒（由 received_at 界定），SUM(size)，源 tos_trades_bl
+//
+// 分区剪枝：tos_trades_bl 按 RANGE(created_at) 日分区（边界 08:00+08）。仅凭
+//   received_at 条件无法剪枝，实测 58 个分区全部执行。加一条宽松的 created_at
+//   条件把执行范围收到当天分区；created_at 是入库时间、received_at 是收包时间，
+//   正常前者 >= 后者，10 分钟余量对 60 秒窗口绝对安全，不会漏行。
+//
+// 新鲜度：窗口内零行 = 收盘或断流 → vol1mFresh=false，接口返回 null 而非 0。
+//   trade_count 由外部 monitor_market.py 维护，断流时可能留着旧值，若这里用 0
+//   冒充观测结果，页面上会出现"1分钟成交8次 + 0股"的自相矛盾。
+const vol1mCache = new Map();   // symbol -> { vol, cnt }
+let vol1mFresh    = false;      // 本轮数据是否可信
+let vol1mLastAt   = null;       // 窗口内最新一笔成交时间
+let vol1mQuietAt  = 0;          // 断流日志节流时间戳
+
+async function refreshVol1mCache() {
+  const client = await pricePool.connect();
+  try {
+    await client.query('SET statement_timeout = 5000');
+    const { rows } = await client.query(`
+      SELECT symbol,
+             SUM(size)::bigint AS vol_1m,
+             COUNT(*)::int     AS cnt_1m,
+             MAX(received_at)  AS last_at
+      FROM ${TRADES_TABLE}
+      WHERE created_at  >= NOW() - INTERVAL '10 minutes'
+        AND received_at >= NOW() - INTERVAL '60 seconds'
+      GROUP BY symbol
+    `);
+
+    vol1mCache.clear();
+    let maxAt = null;
+    let total = 0;
+    for (const row of rows) {
+      const vol = Number(row.vol_1m);
+      vol1mCache.set(row.symbol, { vol, cnt: Number(row.cnt_1m) });
+      total += vol;
+      const at = new Date(row.last_at);
+      if (maxAt === null || at > maxAt) maxAt = at;
+    }
+    vol1mLastAt = maxAt;
+    vol1mFresh  = rows.length > 0;
+
+    if (vol1mFresh) {
+      console.log(`[Vol1m] refreshed, ${vol1mCache.size} symbols, ${total} shares`);
+    } else if (Date.now() - vol1mQuietAt > 60000) {
+      // 收盘后每 10 秒刷一条日志没有意义，节流到每分钟最多一条
+      vol1mQuietAt = Date.now();
+      console.log('[Vol1m] no trades in last 60s (收盘或断流)');
+    }
+  } catch (err) {
+    // 查询失败 ≠ 没有成交：保留旧缓存，但标记不新鲜让接口返回 null
+    vol1mFresh = false;
+    console.error('[Vol1m] Error:', err.message);
+  } finally {
+    await client.query('SET statement_timeout = 0').catch(() => {});
+    client.release();
+  }
+}
+
 // === 当日分时成交量写入 daily_intraday_vol ===
 // period_vol 存当天从开盘到该分钟的累计成交量（单调递增）
 // 数据来源已改为 daily_summary.total_volume（PPro8 L1DB 全量，由 orderbook_processor_bl.py 写入）
@@ -4240,6 +4301,9 @@ function startAlertMonitor() {
 
   console.log(`[Window10m] starting, interval=10s`);
   runScan('Window10m', updateWindow10m, 10000);
+
+  console.log(`[Vol1m] starting, interval=10s`);
+  runScan('Vol1m', refreshVol1mCache, 10000);
 
   console.log(`[Window30m] starting, interval=10s`);
   runScan('Window30m', updateWindow30m, 10000);
