@@ -2503,18 +2503,33 @@ async function refreshAvgVol3dCache() {
   }
 }
 
-// ── 1分钟成交股数缓存 ─────────────────────────────────────────────────────
-// 口径：滚动最近60秒（由 received_at 界定），SUM(size)，源 tos_trades_bl
+// ── 1分钟成交股数 + 成交价格区间 缓存 ─────────────────────────────────────
+// 口径：滚动最近60秒（由 received_at 界定），源 tos_trades_bl
+//   vol / cnt          : SUM(size) / COUNT(*)          → 页面「1分钟成交股数」列与筛选
+//   first / low / high : 窗口内首笔 / 最低 / 最高成交价 → 页面「1分钟成交价格区间」筛选
+//
+// 为什么两者共用一次查询：口径完全相同（同一张表、同一滚动60秒窗口、同一分区剪枝
+//   条件），只是聚合列不同。共用省掉第二个 10s 任务，也保证两者新鲜度天然一致。
+//
+// 为什么价格条件用聚合级 FILTER 而不是加进 WHERE：WHERE 里没有 price 条件是
+//   vol_1m 的既有语义（SUM(size) 不关心价格）。往 WHERE 加 price > 0 会把那些行的
+//   size 一起排除、改变已验证的 vol_1m 结果。所以价格过滤只作用在价格聚合上。
+//   MIN/MAX 天然忽略 NULL，只需 price > 0；array_agg 会把 NULL 收进数组，需同时过
+//   IS NOT NULL。
+//
+// 首笔定序：array_agg(... ORDER BY received_at ASC, id ASC)。实测存在5笔挤在同一
+//   received_at 的批量入库情况，只按 received_at 排"首笔"结果不确定，必须用 id 破平。
 //
 // 分区剪枝：tos_trades_bl 按 RANGE(created_at) 日分区（边界 08:00+08）。仅凭
 //   received_at 条件无法剪枝，实测 58 个分区全部执行。加一条宽松的 created_at
-//   条件把执行范围收到当天分区；created_at 是入库时间、received_at 是收包时间，
-//   正常前者 >= 后者，10 分钟余量对 60 秒窗口绝对安全，不会漏行。
+//   条件把执行范围收到当天分区；实测 created_at - received_at 恒为 0，10 分钟余量
+//   对 60 秒窗口绝对安全，不会漏行。
 //
-// 新鲜度：窗口内零行 = 收盘或断流 → vol1mFresh=false，接口返回 null 而非 0。
-//   trade_count 由外部 monitor_market.py 维护，断流时可能留着旧值，若这里用 0
-//   冒充观测结果，页面上会出现"1分钟成交8次 + 0股"的自相矛盾。
-const vol1mCache = new Map();   // symbol -> { vol, cnt }
+// 新鲜度：窗口内零行 = 收盘或断流 → vol1mFresh=false，接口两组字段一起返回 null。
+//   ⚠ 注意两者的降级方向相反：vol_1m 为 null 时前端剔除该行，价格区间为 null 时
+//   前端放行（无成交就无从判断价格波动，需求指定）。所以断流时价格区间筛选会静默
+//   失效，靠状态栏 #vol1m-stale 标签告知用户。
+const vol1mCache = new Map();   // symbol -> { vol, cnt, first, low, high, pcnt }
 let vol1mFresh    = false;      // 本轮数据是否可信
 let vol1mLastAt   = null;       // 窗口内最新一笔成交时间
 let vol1mQuietAt  = 0;          // 断流日志节流时间戳
@@ -2527,7 +2542,12 @@ async function refreshVol1mCache() {
       SELECT symbol,
              SUM(size)::bigint AS vol_1m,
              COUNT(*)::int     AS cnt_1m,
-             MAX(received_at)  AS last_at
+             MAX(received_at)  AS last_at,
+             (array_agg(price ORDER BY received_at ASC, id ASC)
+                FILTER (WHERE price IS NOT NULL AND price > 0))[1]        AS first_price,
+             MIN(price) FILTER (WHERE price > 0)                          AS low_price,
+             MAX(price) FILTER (WHERE price > 0)                          AS high_price,
+             (COUNT(*)  FILTER (WHERE price IS NOT NULL AND price > 0))::int AS price_cnt
       FROM ${TRADES_TABLE}
       WHERE created_at  >= NOW() - INTERVAL '10 minutes'
         AND received_at >= NOW() - INTERVAL '60 seconds'
@@ -2537,9 +2557,23 @@ async function refreshVol1mCache() {
     vol1mCache.clear();
     let maxAt = null;
     let total = 0;
+    let bandCount = 0;
     for (const row of rows) {
-      const vol = Number(row.vol_1m);
-      vol1mCache.set(row.symbol, { vol, cnt: Number(row.cnt_1m) });
+      const vol   = Number(row.vol_1m);
+      const first = row.first_price != null ? Number(row.first_price) : null;
+      const low   = row.low_price   != null ? Number(row.low_price)   : null;
+      const high  = row.high_price  != null ? Number(row.high_price)  : null;
+      // 三者必须同时可用才算有价格区间；缺一个就整体置 null，不做部分推断
+      const hasBand = Number.isFinite(first) && Number.isFinite(low) && Number.isFinite(high);
+      if (hasBand) bandCount++;
+      vol1mCache.set(row.symbol, {
+        vol,
+        cnt:   Number(row.cnt_1m),
+        first: hasBand ? first : null,
+        low:   hasBand ? low   : null,
+        high:  hasBand ? high  : null,
+        pcnt:  Number(row.price_cnt),
+      });
       total += vol;
       const at = new Date(row.last_at);
       if (maxAt === null || at > maxAt) maxAt = at;
@@ -2548,7 +2582,7 @@ async function refreshVol1mCache() {
     vol1mFresh  = rows.length > 0;
 
     if (vol1mFresh) {
-      console.log(`[Vol1m] refreshed, ${vol1mCache.size} symbols, ${total} shares`);
+      console.log(`[Vol1m] refreshed, ${vol1mCache.size} symbols, ${total} shares, ${bandCount} with price band`);
     } else if (Date.now() - vol1mQuietAt > 60000) {
       // 收盘后每 10 秒刷一条日志没有意义，节流到每分钟最多一条
       vol1mQuietAt = Date.now();
@@ -2562,6 +2596,18 @@ async function refreshVol1mCache() {
     await client.query('SET statement_timeout = 0').catch(() => {});
     client.release();
   }
+}
+
+// 1分钟成交价格区间：窗口内相对首笔成交价的最大绝对偏离
+//   maxDev = max(首笔 - 最低, 最高 - 首笔)，固化到 4 位小数。
+// 固化理由：0.1 在二进制浮点里不精确，首笔 90.10 / 成交 90.20 的原始差值可能是
+//   0.10000000000000853，不四舍五入会让前端边界比较出错（前端另有 1e-9 容差兜底）。
+// 复用 vol1mFresh：与 vol_1m 是同一次查询的产物，新鲜度必然一致。
+function min1MaxDev(symbol) {
+  if (!vol1mFresh) return null;
+  const s = vol1mCache.get(symbol);
+  if (!s || s.first == null || s.low == null || s.high == null) return null;
+  return Number(Math.max(s.first - s.low, s.high - s.first).toFixed(4));
 }
 
 // === 当日分时成交量写入 daily_intraday_vol ===
