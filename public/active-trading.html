@@ -502,9 +502,9 @@
         <th onclick="sortBy('day_range')" title="今日最高价-最低价">当日波动</th>
         <th onclick="sortBy('bid')" title="买一/卖一价">买一 / 卖一</th>
         <th onclick="sortBy('spread')" title="卖一-买一">价差</th>
-        <th onclick="sortBy('trade_count')" title="过去window_secs秒内的成交次数" class="sort-desc">1分钟成交次数</th>
+        <th onclick="sortBy('trade_count')" title="过去window_secs秒内的成交次数" class="sort-desc" style="display:none;">1分钟成交次数</th>
         <th onclick="sortBy('vol_1m')" title="最近60秒成交股数（源 tos_trades_bl.received_at 滚动窗口，与成交次数不同源，两者不保证严格可比）">1分钟成交股数</th>
-        <th onclick="sortBy('min1_first_price')" title="最近60秒窗口内首笔成交价（1分钟成交价格区间筛选的偏离锚点）">1分钟成交价格</th>
+        <th onclick="sortBy('min1_first_price')" title="最近60秒窗口内首笔成交价（1分钟成交价格区间筛选的偏离锚点）" style="display:none;">1分钟成交价格</th>
         <th onclick="sortBy('first_detected_at')" title="本次被判定为活跃的起始时间">首次检测</th>
       </tr>
     </thead>
@@ -1036,9 +1036,9 @@ function buildRowHTML(r) {
     <td>${r.day_range != null ? fmt(r.day_range, 2) : '—'}</td>
     <td>${bidAsk}</td>
     <td>${spreadStr}</td>
-    <td>${r.trade_count != null ? r.trade_count : '—'}</td>
+    <td style="display:none;">${r.trade_count != null ? r.trade_count : '—'}</td>
     <td style="color:#8fd3b6;">${r.vol_1m != null ? fmtVol(Number(r.vol_1m)) : '—'}</td>
-    <td>${r.min1_first_price != null ? fmt(r.min1_first_price, 2) : '—'}</td>
+    <td style="display:none;">${r.min1_first_price != null ? fmt(r.min1_first_price, 2) : '—'}</td>
     <td style="color:#888;font-size:12px;">${fmtTime(r.first_detected_at)}</td>
   </tr>`;
 }
