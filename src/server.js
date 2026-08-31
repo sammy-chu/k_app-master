@@ -1726,6 +1726,7 @@ app.get('/api/active-trading', async (req, res) => {
         last_price:         lastPrice,
         total_volume:       totalVolume,
         avg_vol_3d:         avgVol3dCache.get(symbol) ?? null,
+        vol_1m:             vol1mFresh ? (vol1mCache.get(symbol)?.vol ?? 0) : null,
         high_price:         highPrice,
         low_price:          lowPrice,
         day_range:          dayRange,
@@ -1754,7 +1755,13 @@ app.get('/api/active-trading', async (req, res) => {
       updated_at: r.updated_at, 
     })); 
 
-    res.json({ count: results.length, symbols: results, cross_iceberg: crossIceberg });
+    res.json({
+      count: results.length,
+      symbols: results,
+      cross_iceberg: crossIceberg,
+      vol_1m_fresh: vol1mFresh,
+      vol_1m_last_at: vol1mLastAt,
+    });
   } catch (e) {
     console.error('[ActiveTrading] API error:', e.message);
     res.status(500).json({ error: 'active_trading_failed' });
