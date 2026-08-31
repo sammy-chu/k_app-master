@@ -413,6 +413,14 @@
           </div>
         </div>
         <div class="filter-group">
+          <label>1分钟成交股数区间（股）</label>
+          <div class="filter-row">
+            <input type="number" id="vol1mMin" placeholder="最低" step="100">
+            <span class="filter-sep">—</span>
+            <input type="number" id="vol1mMax" placeholder="最高" step="100">
+          </div>
+        </div>
+        <div class="filter-group">
           <label>当日波动区间（高-低，元）</label>
           <div class="filter-row">
             <input type="number" id="dayRangeMin" placeholder="最低" step="0.01">
@@ -533,7 +541,7 @@ let countdown = 10;
 let maxVol = 1;
 let blockedStocks = JSON.parse(localStorage.getItem('sharedBlockedStocks') || '[]');
 
-const FILTER_IDS = ['priceMin','priceMax','volMin','volMax','dayRangeMin','dayRangeMax','spreadMin','spreadMax'];
+const FILTER_IDS = ['priceMin','priceMax','volMin','volMax','vol1mMin','vol1mMax','dayRangeMin','dayRangeMax','spreadMin','spreadMax'];
 const FILTER_QUERY_KEYS = FILTER_IDS.map(id => id.replace(/([A-Z])/g, '_$1').toLowerCase());
 const NAV_STATE_KEY = 'rememberedFilterUrls';
 const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/oscillator-screener','/abnormal-trades']);
@@ -791,6 +799,8 @@ function applyFilter() {
   const priceMax    = getV('priceMax');
   const volMin      = getV('volMin');
   const volMax      = getV('volMax');
+  const vol1mMin    = getV('vol1mMin');
+  const vol1mMax    = getV('vol1mMax');
   const dayRangeMin = getV('dayRangeMin');
   const dayRangeMax = getV('dayRangeMax');
   const spreadMin   = getV('spreadMin');
@@ -810,12 +820,15 @@ function applyFilter() {
     // 不应成为绕开筛选条件的后门。
     const price    = Number(row.last_price)  || 0;
     const vol      = Number(row.total_volume) || 0;
+    const vol1m    = row.vol_1m != null ? Number(row.vol_1m) : null;
     const dayRange = row.day_range != null ? Number(row.day_range) : null;
     const spread   = row.spread    != null ? Number(row.spread)    : null;
     if (priceMin    !== null && price    < priceMin)    return false;
     if (priceMax    !== null && price    > priceMax)    return false;
     if (volMin      !== null && vol      < volMin)      return false;
     if (volMax      !== null && vol      > volMax)      return false;
+    if (vol1mMin    !== null && (vol1m === null || vol1m < vol1mMin)) return false;
+    if (vol1mMax    !== null && (vol1m === null || vol1m > vol1mMax)) return false;
     if (dayRangeMin !== null && (dayRange === null || dayRange < dayRangeMin)) return false;
     if (dayRangeMax !== null && (dayRange === null || dayRange > dayRangeMax)) return false;
     if (spreadMin   !== null && (spread === null || spread < spreadMin))       return false;
@@ -867,6 +880,7 @@ function updateHighlights() {
   const pairs = [
     ['priceMin','priceMax','价格'],
     ['volMin','volMax','成交量'],
+    ['vol1mMin','vol1mMax','1分钟股数'],
     ['dayRangeMin','dayRangeMax','当日波动'],
     ['spreadMin','spreadMax','价差'],
   ];
