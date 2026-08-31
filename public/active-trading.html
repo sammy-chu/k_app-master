@@ -618,6 +618,7 @@ function rememberCurrentUrl() {
 const GRACE_LOW_MS  = 2 * 60 * 1000;  // 成交次数 < 10：保留 2 分钟
 const GRACE_HIGH_MS = 5 * 60 * 1000;  // 成交次数 >= 10：保留 5 分钟并置顶
 const GRACE_HIGH_THRESHOLD = 10;
+const SYMBOL_REFRESH_MS = 3000;      // 同一股票 3 秒内最多刷新一次
 let trackedMap = new Map(); // symbol -> 行数据（跨多次拉取持久化，承载宽限期状态）
 
 // 1分钟价格偏离比较的浮点容差：0.1 在二进制里不精确，首笔90.10/成交90.20 算出的
@@ -761,6 +762,21 @@ function mergeFreshData(freshRows) {
 
   for (const r of freshRows) {
     freshSymbols.add(r.symbol);
+
+    const prevRow = trackedMap.get(r.symbol);
+
+    // ── 同一股票 3 秒内最多刷新一次：不足 3 秒则跳过数据覆盖，保留旧快照 ──
+    // freshSymbols 登记必须在跳过之前——否则节流期间的股票会被误判为掉出活跃列表。
+    if (prevRow && prevRow._lastRefreshMs != null && now - prevRow._lastRefreshMs < SYMBOL_REFRESH_MS) {
+      // 若该股正处于宽限期（_active === false）但已重新活跃，解除宽限期避免被误删
+      if (prevRow._active === false) {
+        prevRow._active = true;
+        prevRow._graceUntilMs = null;
+        prevRow._pinned = false;
+      }
+      continue;
+    }
+
     r._firstDetectedMs = r.first_detected_at ? new Date(r.first_detected_at).getTime() : null;
     r._active = true;
     r._graceUntilMs = null;
@@ -783,7 +799,7 @@ function mergeFreshData(freshRows) {
     // 它还是 null 而误判为新周期、把累积值清零。
     // min1_max_dev 为 null 时不参与累积："无数据"不能当成"零偏离"，否则会把断流
     // 期间的股票永久记成"极稳"，让筛选形同虚设。
-    const prevRow   = trackedMap.get(r.symbol);
+    // prevRow 已在循环开头获取（节流判断处）
     const sameCycle = prevRow && prevRow._min1CycleAt === r.first_detected_at;
     const prevSeen  = sameCycle ? prevRow._min1DevSeen : null;
     const freshDev  = r.min1_max_dev != null ? Number(r.min1_max_dev) : null;
@@ -802,6 +818,7 @@ function mergeFreshData(freshRows) {
       r._icebergFlash = false;
     }
 
+    r._lastRefreshMs = now;
     trackedMap.set(r.symbol, r);
   }
 
