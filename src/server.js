@@ -1727,6 +1727,16 @@ app.get('/api/active-trading', async (req, res) => {
         total_volume:       totalVolume,
         avg_vol_3d:         avgVol3dCache.get(symbol) ?? null,
         vol_1m:             vol1mFresh ? (vol1mCache.get(symbol)?.vol ?? 0) : null,
+        // 1分钟成交价格区间：与 vol_1m 同一次查询、同一滚动60秒窗口。
+        // 三态：fresh 且窗口内有有效价成交 → 数值；fresh 但该股窗口内无成交 → null；
+        //       不 fresh（断流/收盘）→ null。
+        // ⚠ 这里的 null 语义是"无从判断"，前端对 null 放行不过滤（与同一行上方的
+        //   vol_1m「null 即剔除」方向相反，是需求指定的口径，不是笔误）。
+        min1_first_price:   vol1mFresh ? (vol1mCache.get(symbol)?.first ?? null) : null,
+        min1_low:           vol1mFresh ? (vol1mCache.get(symbol)?.low   ?? null) : null,
+        min1_high:          vol1mFresh ? (vol1mCache.get(symbol)?.high  ?? null) : null,
+        min1_trade_count:   vol1mFresh ? (vol1mCache.get(symbol)?.pcnt  ?? null) : null,
+        min1_max_dev:       min1MaxDev(symbol),
         high_price:         highPrice,
         low_price:          lowPrice,
         day_range:          dayRange,
