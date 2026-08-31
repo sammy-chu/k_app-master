@@ -421,6 +421,14 @@
           </div>
         </div>
         <div class="filter-group">
+          <label>1分钟成交价格区间（偏离首笔，元）</label>
+          <div class="filter-row">
+            <input type="number" id="min1DevMin" placeholder="最低" step="0.01">
+            <span class="filter-sep">—</span>
+            <input type="number" id="min1DevMax" placeholder="最高" step="0.01">
+          </div>
+        </div>
+        <div class="filter-group">
           <label>当日波动区间（高-低，元）</label>
           <div class="filter-row">
             <input type="number" id="dayRangeMin" placeholder="最低" step="0.01">
@@ -542,7 +550,7 @@ let countdown = 10;
 let maxVol = 1;
 let blockedStocks = JSON.parse(localStorage.getItem('sharedBlockedStocks') || '[]');
 
-const FILTER_IDS = ['priceMin','priceMax','volMin','volMax','vol1mMin','vol1mMax','dayRangeMin','dayRangeMax','spreadMin','spreadMax'];
+const FILTER_IDS = ['priceMin','priceMax','volMin','volMax','vol1mMin','vol1mMax','min1DevMin','min1DevMax','dayRangeMin','dayRangeMax','spreadMin','spreadMax'];
 const FILTER_QUERY_KEYS = FILTER_IDS.map(id => id.replace(/([A-Z])/g, '_$1').toLowerCase());
 const NAV_STATE_KEY = 'rememberedFilterUrls';
 const NAV_PERSIST_PATHS = new Set(['/ranking','/screener','/stable-screener','/active-trading','/swing-screener','/oscillator-screener','/abnormal-trades']);
@@ -831,6 +839,8 @@ function applyFilter() {
   const volMax      = getV('volMax');
   const vol1mMin    = getV('vol1mMin');
   const vol1mMax    = getV('vol1mMax');
+  const min1DevMin  = getV('min1DevMin');
+  const min1DevMax  = getV('min1DevMax');
   const dayRangeMin = getV('dayRangeMin');
   const dayRangeMax = getV('dayRangeMax');
   const spreadMin   = getV('spreadMin');
@@ -863,6 +873,16 @@ function applyFilter() {
     if (dayRangeMax !== null && (dayRange === null || dayRange > dayRangeMax)) return false;
     if (spreadMin   !== null && (spread === null || spread < spreadMin))       return false;
     if (spreadMax   !== null && (spread === null || spread > spreadMax))       return false;
+
+    // 1分钟成交价格区间：用本轮活跃期内累积的最大偏离判定（单调，不闪回）。
+    // null = 60秒内无成交 / 数据断流 → 放行不过滤。
+    // ⚠ 注意与上面 vol1m / dayRange / spread 的「null 即剔除」方向相反，这是需求
+    //   指定的口径：无观测数据时不做判断。副作用是断流时本条筛选静默失效，由
+    //   状态栏 #vol1m-stale 标签负责告知（Step 5 已把文案覆盖到价格区间）。
+    const min1Dev = row._min1DevSeen != null ? Number(row._min1DevSeen) : null;
+    if (min1Dev !== null && min1DevMin !== null && min1Dev < min1DevMin - MIN1_DEV_EPS) return false;
+    if (min1Dev !== null && min1DevMax !== null && min1Dev > min1DevMax + MIN1_DEV_EPS) return false;
+
     return true;
   });
 
@@ -911,6 +931,7 @@ function updateHighlights() {
     ['priceMin','priceMax','价格'],
     ['volMin','volMax','成交量'],
     ['vol1mMin','vol1mMax','1分钟股数'],
+    ['min1DevMin','min1DevMax','1分钟偏离'],
     ['dayRangeMin','dayRangeMax','当日波动'],
     ['spreadMin','spreadMax','价差'],
   ];
