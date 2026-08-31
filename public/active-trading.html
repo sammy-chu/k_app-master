@@ -611,6 +611,10 @@ const GRACE_HIGH_MS = 5 * 60 * 1000;  // 成交次数 >= 10：保留 5 分钟并
 const GRACE_HIGH_THRESHOLD = 10;
 let trackedMap = new Map(); // symbol -> 行数据（跨多次拉取持久化，承载宽限期状态）
 
+// 1分钟价格偏离比较的浮点容差：0.1 在二进制里不精确，首笔90.10/成交90.20 算出的
+// 偏离可能是 0.10000000000000853，不留容差会把本该保留的边界行误剔。
+const MIN1_DEV_EPS = 1e-9;
+
 // ── FETCH ────────────────────────────────────────────────────────────────
 // 注：价格/成交量/当日波动/价差筛选完全在前端 applyFilter() 中处理，不向后端传递，
 // 因为后端 active_trading_symbols 表的语义是"当前全量活跃股票"——一旦按这些条件筛选，
@@ -756,6 +760,24 @@ function mergeFreshData(freshRows) {
       r.first_detected_at = oldRow.first_detected_at;
       r._firstDetectedMs = oldRow._firstDetectedMs;
     }
+
+    // ── 1分钟价格偏离：累积本轮活跃期内观测到的最大值（单调只增，绝不闪回）──
+    // 后端返回的 min1_max_dev 是"当前这一分钟窗口"的瞬时值，每 10 秒重算会上下浮动，
+    // 直接拿来筛会让行"消失→再出现"来回闪。这里按预警周期累积最大值：只要出现过
+    // 任何一分钟内价格走出限定区间，就一直不再预警，直到该股掉出活跃列表、以新的
+    // first_detected_at 重新进榜时清零。
+    // 必须放在上面的冰山继承块之后——继承会补上 first_detected_at，放在之前会因为
+    // 它还是 null 而误判为新周期、把累积值清零。
+    // min1_max_dev 为 null 时不参与累积："无数据"不能当成"零偏离"，否则会把断流
+    // 期间的股票永久记成"极稳"，让筛选形同虚设。
+    const prevRow   = trackedMap.get(r.symbol);
+    const sameCycle = prevRow && prevRow._min1CycleAt === r.first_detected_at;
+    const prevSeen  = sameCycle ? prevRow._min1DevSeen : null;
+    const freshDev  = r.min1_max_dev != null ? Number(r.min1_max_dev) : null;
+    r._min1CycleAt  = r.first_detected_at;
+    r._min1DevSeen  = freshDev == null
+      ? (prevSeen != null ? prevSeen : null)
+      : Math.max(prevSeen != null ? prevSeen : 0, freshDev);
 
     // 冰山单判断
     r._icebergPinned = !!r.iceberg_updated_at;
