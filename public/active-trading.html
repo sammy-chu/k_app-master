@@ -504,11 +504,12 @@
         <th onclick="sortBy('spread')" title="卖一-买一">价差</th>
         <th onclick="sortBy('trade_count')" title="过去window_secs秒内的成交次数" class="sort-desc">1分钟成交次数</th>
         <th onclick="sortBy('vol_1m')" title="最近60秒成交股数（源 tos_trades_bl.received_at 滚动窗口，与成交次数不同源，两者不保证严格可比）">1分钟成交股数</th>
+        <th onclick="sortBy('min1_first_price')" title="最近60秒窗口内首笔成交价（1分钟成交价格区间筛选的偏离锚点）">1分钟成交价格</th>
         <th onclick="sortBy('first_detected_at')" title="本次被判定为活跃的起始时间">首次检测</th>
       </tr>
     </thead>
     <tbody id="tbody">
-      <tr class="empty-row"><td colspan="11"><span class="spinner"></span>加载中…</td></tr>
+      <tr class="empty-row"><td colspan="12"><span class="spinner"></span>加载中…</td></tr>
     </tbody>
   </table>
 
@@ -982,7 +983,7 @@ function sortBy(key) {
   document.querySelectorAll('#main-table thead th').forEach((th) => {
     th.classList.remove('sort-asc', 'sort-desc');
   });
-  const idx = ['symbol','last_price','change_pct','total_volume','avg_vol_3d','day_range','bid','spread','trade_count','vol_1m','first_detected_at'].indexOf(key);
+  const idx = ['symbol','last_price','change_pct','total_volume','avg_vol_3d','day_range','bid','spread','trade_count','vol_1m','min1_first_price','first_detected_at'].indexOf(key);
   const th = document.querySelectorAll('#main-table thead th')[idx];
   if (th) th.classList.add(sortDir === 1 ? 'sort-asc' : 'sort-desc');
   applyFilter();
@@ -993,8 +994,8 @@ function renderTable() {
   const tbody = document.getElementById('tbody');
   if (sortedData.length === 0) {
     tbody.innerHTML = iceOnly
-      ? `<tr class="empty-row"><td colspan="11">暂无冰山捕捉数据</td></tr>`
-      : `<tr class="empty-row"><td colspan="11">暂无活跃成交股票</td></tr>`;
+      ? `<tr class="empty-row"><td colspan="12">暂无冰山捕捉数据</td></tr>`
+      : `<tr class="empty-row"><td colspan="12">暂无活跃成交股票</td></tr>`;
     return;
   }
   tbody.innerHTML = sortedData.map(buildRowHTML).join('');
@@ -1037,6 +1038,7 @@ function buildRowHTML(r) {
     <td>${spreadStr}</td>
     <td>${r.trade_count != null ? r.trade_count : '—'}</td>
     <td style="color:#8fd3b6;">${r.vol_1m != null ? fmtVol(Number(r.vol_1m)) : '—'}</td>
+    <td>${r.min1_first_price != null ? fmt(r.min1_first_price, 2) : '—'}</td>
     <td style="color:#888;font-size:12px;">${fmtTime(r.first_detected_at)}</td>
   </tr>`;
 }
